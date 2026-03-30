@@ -43,6 +43,7 @@ export function useRouteCalculation(tripStore: TripStoreState, selectedDayId: nu
 
     for (let i = 0; i < geoAssignments.length; i++) {
       const a = geoAssignments[i]
+      const isLast = i === geoAssignments.length - 1
       const durationMin = a.duration_minutes ?? a.place?.duration_minutes ?? 60
       const seg = i > 0 ? segments[i - 1] : null
 
@@ -57,7 +58,10 @@ export function useRouteCalculation(tripStore: TripStoreState, selectedDayId: nu
         if (currentTime && seg) {
           const drivingMin = Math.ceil(seg.duration / 60)
           arrivalTime = addMinutesToTime(currentTime, drivingMin)
-          departureTime = addMinutesToTime(arrivalTime, durationMin)
+          // Last stop: only arrival, no departure
+          if (!isLast) {
+            departureTime = addMinutesToTime(arrivalTime, durationMin)
+          }
         }
       }
 
@@ -67,7 +71,7 @@ export function useRouteCalculation(tripStore: TripStoreState, selectedDayId: nu
         assignmentId: a.id,
         arrivalTime,
         departureTime,
-        durationMinutes: durationMin,
+        durationMinutes: isLast ? 0 : durationMin,
         drivingFromPrev: seg ? seg.duration : null,
         distanceFromPrev: seg ? seg.distance : null,
         drivingText: seg ? seg.drivingText : null,

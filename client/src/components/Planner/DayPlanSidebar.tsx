@@ -824,6 +824,7 @@ export default function DayPlanSidebar({
                                 const timing = stopTimings?.find(st => st.assignmentId === assignment.id)
                                 if (!timing) return null
                                 const isFirst = placeIdx === 0
+                                const isLast = placeIdx === placeItems.length - 1
 
                                 return (
                                   <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -867,7 +868,7 @@ export default function DayPlanSidebar({
                                         }
                                       </span>
                                     ) : (
-                                      timing.departureTime && (
+                                      !isLast && timing.departureTime && (
                                         <span style={{
                                           display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 500,
                                           padding: '1px 6px', borderRadius: 4,
@@ -879,8 +880,8 @@ export default function DayPlanSidebar({
                                       )
                                     )}
 
-                                    {/* Duration - editable for non-first stops */}
-                                    {!isFirst && (
+                                    {/* Duration - editable for non-first, non-last stops */}
+                                    {!isFirst && !isLast && (
                                       <span
                                         style={{
                                           display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 500,
