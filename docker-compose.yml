@@ -10,8 +10,7 @@ services:
       # - ALLOWED_ORIGINS=https://yourdomain.com  # Optional: restrict CORS to specific origins
       - PORT=3000
     volumes:
-      - ./data:/app/data
-      - ./uploads:/app/uploads
+      - ./data:/mnt/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]

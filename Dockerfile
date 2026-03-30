@@ -27,8 +27,11 @@ COPY --from=client-builder /app/client/dist ./public
 COPY --from=client-builder /app/client/public/fonts ./public/fonts
 
 # Verzeichnisse erstellen + Symlink für Abwärtskompatibilität (alte docker-compose mounten nach /app/server/uploads)
-RUN mkdir -p /app/data /app/uploads/files /app/uploads/covers /app/uploads/avatars /app/uploads/photos && \
-    mkdir -p /app/server && ln -s /app/uploads /app/server/uploads && ln -s /app/data /app/server/data
+RUN mkdir -p /app/server
+
+# Entrypoint: symlink data dirs to persistent volume at runtime
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Umgebung setzen
 ENV NODE_ENV=production
@@ -36,4 +39,5 @@ ENV PORT=3000
 
 EXPOSE 3000
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "--import", "tsx", "src/index.ts"]
