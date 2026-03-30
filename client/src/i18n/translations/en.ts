@@ -604,6 +604,11 @@ const en: Record<string, string | { name: string; category: string }[]> = {
   'trip.toast.reservationAdded': 'Reservation added',
   'trip.toast.deleted': 'Deleted',
   'trip.confirm.deletePlace': 'Are you sure you want to delete this place?',
+  'trip.shiftDates.title': 'Shift Trip Dates',
+  'trip.shiftDates.description': 'Shift all days, reservations, and dates by a number of days. Positive numbers move forward, negative move backward.',
+  'trip.shiftDates.days': 'Days to shift',
+  'trip.shiftDates.apply': 'Shift Dates',
+  'trip.toast.datesShifted': 'Trip dates shifted successfully',
 
   // Day Plan Sidebar
   'dayplan.emptyDay': 'No places planned for this day',
@@ -629,6 +634,10 @@ const en: Record<string, string | { name: string; category: string }[]> = {
   'dayplan.pdf': 'PDF',
   'dayplan.pdfTooltip': 'Export day plan as PDF',
   'dayplan.pdfError': 'Failed to export PDF',
+  'dayplan.arrival': 'Arrive',
+  'dayplan.departs': 'Depart',
+  'dayplan.setDeparture': 'Set departure time',
+  'dayplan.durationPrompt': 'Time spent (minutes)',
 
   // Places Sidebar
   'places.addPlace': 'Add Place/Activity',

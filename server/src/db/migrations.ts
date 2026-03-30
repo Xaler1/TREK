@@ -321,6 +321,9 @@ function runMigrations(db: Database.Database): void {
         UNIQUE(file_id, place_id)
       )`);
     },
+    () => {
+      try { db.exec('ALTER TABLE day_assignments ADD COLUMN duration_minutes INTEGER'); } catch {}
+    },
   ];
 
   if (currentVersion < migrations.length) {

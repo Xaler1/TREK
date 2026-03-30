@@ -193,6 +193,21 @@ interface GooglePlaceDetails extends GooglePlaceResult {
   photos?: { name: string; authorAttributions?: { displayName?: string }[] }[];
 }
 
+function decodePolyline(encoded: string): [number, number][] {
+  const points: [number, number][] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let b, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+    points.push([lat / 1e5, lng / 1e5]);
+  }
+  return points;
+}
+
 const router = express.Router();
 
 function getMapsKey(userId: number): string | null {
@@ -471,6 +486,98 @@ router.get('/reverse', authenticate, async (req: Request, res: Response) => {
     res.json({ name, address: data.display_name || null });
   } catch {
     res.json({ name: null, address: null });
+  }
+});
+
+// POST /api/maps/directions - Calculate route with segments
+router.post('/directions', authenticate, async (req: Request, res: Response) => {
+  const { waypoints, profile = 'driving' } = req.body;
+  if (!Array.isArray(waypoints) || waypoints.length < 2) {
+    return res.status(400).json({ error: 'At least 2 waypoints required' });
+  }
+
+  const authReq = req as AuthRequest;
+  const mapsKey = getMapsKey(authReq.user.id);
+
+  // Try Google Directions API first if key available
+  if (mapsKey) {
+    try {
+      const origin = `${waypoints[0].lat},${waypoints[0].lng}`;
+      const destination = `${waypoints[waypoints.length - 1].lat},${waypoints[waypoints.length - 1].lng}`;
+      const waypointsMiddle = waypoints.slice(1, -1);
+      const waypointsParam = waypointsMiddle.length > 0
+        ? `&waypoints=${waypointsMiddle.map((w: any) => `${w.lat},${w.lng}`).join('|')}`
+        : '';
+
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}${waypointsParam}&mode=${profile}&key=${mapsKey}`;
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.status === 'OK' && data.routes?.[0]) {
+        const route = data.routes[0];
+        const legs = route.legs;
+
+        // Decode overview polyline
+        const overviewPoints = decodePolyline(route.overview_polyline.points);
+
+        const segments = legs.map((leg: any, i: number) => ({
+          from: [waypoints[i].lat, waypoints[i].lng],
+          to: [waypoints[i + 1].lat, waypoints[i + 1].lng],
+          mid: [(waypoints[i].lat + waypoints[i + 1].lat) / 2, (waypoints[i].lng + waypoints[i + 1].lng) / 2],
+          distance: leg.distance.value, // meters
+          duration: leg.duration.value, // seconds
+          distanceText: leg.distance.text,
+          durationText: leg.duration.text,
+        }));
+
+        return res.json({
+          source: 'google',
+          coordinates: overviewPoints,
+          segments,
+          totalDistance: legs.reduce((s: number, l: any) => s + l.distance.value, 0),
+          totalDuration: legs.reduce((s: number, l: any) => s + l.duration.value, 0),
+        });
+      }
+    } catch (err) {
+      console.error('[Maps] Google Directions error, falling back to OSRM:', err);
+    }
+  }
+
+  // Fallback: OSRM
+  try {
+    const coords = waypoints.map((w: any) => `${w.lng},${w.lat}`).join(';');
+    const url = `https://router.project-osrm.org/route/v1/${profile}/${coords}?overview=full&geometries=geojson&steps=false&annotations=distance,duration`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.code !== 'Ok' || !data.routes?.[0]) {
+      return res.status(422).json({ error: 'No route found' });
+    }
+
+    const route = data.routes[0];
+    const coordinates = route.geometry.coordinates.map(([lng, lat]: [number, number]) => [lat, lng]);
+    const legs = route.legs;
+
+    const segments = legs.map((leg: any, i: number) => ({
+      from: [waypoints[i].lat, waypoints[i].lng],
+      to: [waypoints[i + 1].lat, waypoints[i + 1].lng],
+      mid: [(waypoints[i].lat + waypoints[i + 1].lat) / 2, (waypoints[i].lng + waypoints[i + 1].lng) / 2],
+      distance: leg.distance,
+      duration: leg.duration,
+      distanceText: leg.distance < 1000 ? `${Math.round(leg.distance)} m` : `${(leg.distance / 1000).toFixed(1)} km`,
+      durationText: leg.duration >= 3600 ? `${Math.floor(leg.duration / 3600)} h ${Math.floor((leg.duration % 3600) / 60)} min` : `${Math.floor(leg.duration / 60)} min`,
+    }));
+
+    return res.json({
+      source: 'osrm',
+      coordinates,
+      segments,
+      totalDistance: route.distance,
+      totalDuration: route.duration,
+    });
+  } catch (err) {
+    console.error('[Maps] OSRM Directions error:', err);
+    return res.status(500).json({ error: 'Failed to calculate route' });
   }
 });
 

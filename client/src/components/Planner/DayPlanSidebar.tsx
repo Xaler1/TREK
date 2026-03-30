@@ -4,7 +4,7 @@ declare global { interface Window { __dragData: DragDataPayload | null } }
 
 import React, { useState, useEffect, useRef } from 'react'
 import ReactDOM from 'react-dom'
-import { ChevronDown, ChevronRight, ChevronUp, Navigation, RotateCcw, ExternalLink, Clock, Pencil, GripVertical, Ticket, Plus, FileText, Check, Trash2, Info, MapPin, Star, Heart, Camera, Lightbulb, Flag, Bookmark, Train, Bus, Plane, Car, Ship, Coffee, ShoppingBag, AlertTriangle, FileDown, Lock, Hotel, Utensils, Users } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, Navigation, RotateCcw, ExternalLink, Clock, Pencil, GripVertical, Ticket, Plus, FileText, Check, Trash2, Info, MapPin, Star, Heart, Camera, Lightbulb, Flag, Bookmark, Train, Bus, Plane, Car, Ship, Coffee, ShoppingBag, AlertTriangle, FileDown, Lock, Hotel, Utensils, Users, CalendarRange } from 'lucide-react'
 
 const RES_ICONS = { flight: Plane, hotel: Hotel, restaurant: Utensils, train: Train, car: Car, cruise: Ship, event: Ticket, tour: Users, other: FileText }
 import { downloadTripPDF } from '../PDF/TripPDF'
@@ -19,7 +19,7 @@ import { useSettingsStore } from '../../store/settingsStore'
 import { useTranslation } from '../../i18n'
 import { formatDate, formatTime, dayTotalCost, currencyDecimals } from '../../utils/formatters'
 import { useDayNotes } from '../../hooks/useDayNotes'
-import type { Trip, Day, Place, Category, Assignment, Reservation, AssignmentsMap, RouteResult } from '../../types'
+import type { Trip, Day, Place, Category, Assignment, Reservation, AssignmentsMap, RouteResult, StopTiming } from '../../types'
 
 const NOTE_ICONS = [
   { id: 'FileText', Icon: FileText },
@@ -69,11 +69,14 @@ interface DayPlanSidebarProps {
   onUpdateDayTitle: (dayId: number, title: string) => void
   onRouteCalculated: (dayId: number, route: RouteResult | null) => void
   onAssignToDay: (placeId: number, dayId: number) => void
-  onRemoveAssignment: (assignmentId: number, dayId: number) => void
+  onRemoveAssignment: (dayId: number, assignmentId: number) => void
   onEditPlace: (place: Place) => void
   onDeletePlace: (placeId: number) => void
   reservations?: Reservation[]
   onAddReservation: () => void
+  stopTimings?: StopTiming[]
+  onUpdateAssignmentTime?: (assignmentId: number, data: { place_time?: string | null; duration_minutes?: number | null }) => Promise<void>
+  onShiftDates?: () => void
 }
 
 export default function DayPlanSidebar({
@@ -85,6 +88,9 @@ export default function DayPlanSidebar({
   onAssignToDay, onRemoveAssignment, onEditPlace, onDeletePlace,
   reservations = [],
   onAddReservation,
+  stopTimings,
+  onUpdateAssignmentTime,
+  onShiftDates,
 }: DayPlanSidebarProps) {
   const toast = useToast()
   const { t, language, locale } = useTranslation()
@@ -390,29 +396,46 @@ export default function DayPlanSidebar({
               </div>
             )}
           </div>
-          <button
-            onClick={async () => {
-              const flatNotes = Object.entries(dayNotes).flatMap(([dayId, notes]) =>
-                notes.map(n => ({ ...n, day_id: Number(dayId) }))
-              )
-              try {
-                await downloadTripPDF({ trip, days, places, assignments, categories, dayNotes: flatNotes, t, locale })
-              } catch (e) {
-                console.error('PDF error:', e)
-                toast.error(t('dayplan.pdfError') + ': ' + (e?.message || String(e)))
-              }
-            }}
-            title={t('dayplan.pdfTooltip')}
-            style={{
-              flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5,
-              padding: '5px 10px', borderRadius: 8, border: 'none',
-              background: 'var(--accent)', color: 'var(--accent-text)', fontSize: 11, fontWeight: 500,
-              cursor: 'pointer', fontFamily: 'inherit',
-            }}
-          >
-            <FileDown size={13} strokeWidth={2} />
-            {t('dayplan.pdf')}
-          </button>
+          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+            {onShiftDates && (
+              <button
+                onClick={onShiftDates}
+                title={t('trip.shiftDates.title')}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '5px 10px', borderRadius: 8,
+                  border: '1px solid var(--border-faint)', background: 'transparent',
+                  color: 'var(--text-muted)', fontSize: 11, fontWeight: 500,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >
+                <CalendarRange size={13} strokeWidth={2} />
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                const flatNotes = Object.entries(dayNotes).flatMap(([dayId, notes]) =>
+                  notes.map(n => ({ ...n, day_id: Number(dayId) }))
+                )
+                try {
+                  await downloadTripPDF({ trip, days, places, assignments, categories, dayNotes: flatNotes, t, locale })
+                } catch (e) {
+                  console.error('PDF error:', e)
+                  toast.error(t('dayplan.pdfError') + ': ' + (e?.message || String(e)))
+                }
+              }}
+              title={t('dayplan.pdfTooltip')}
+              style={{
+                flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5,
+                padding: '5px 10px', borderRadius: 8, border: 'none',
+                background: 'var(--accent)', color: 'var(--accent-text)', fontSize: 11, fontWeight: 500,
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              <FileDown size={13} strokeWidth={2} />
+              {t('dayplan.pdf')}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -607,6 +630,31 @@ export default function DayPlanSidebar({
 
                         return (
                           <React.Fragment key={`place-${assignment.id}`}>
+                            {/* Driving segment info between stops */}
+                            {(() => {
+                              const timing = stopTimings?.find(st => st.assignmentId === assignment.id)
+                              if (!timing || !timing.drivingText) return null
+                              return (
+                                <div style={{
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                                  padding: '3px 12px', margin: '2px 16px',
+                                  fontSize: 10, color: 'var(--text-faint)', fontWeight: 500,
+                                }}>
+                                  <div style={{ flex: 1, height: 1, background: 'var(--border-faint)' }} />
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
+                                    <Car size={9} strokeWidth={2} />
+                                    {timing.drivingText}
+                                  </span>
+                                  {timing.distanceText && (
+                                    <>
+                                      <span style={{ opacity: 0.4 }}>·</span>
+                                      <span>{timing.distanceText}</span>
+                                    </>
+                                  )}
+                                  <div style={{ flex: 1, height: 1, background: 'var(--border-faint)' }} />
+                                </div>
+                              )
+                            })()}
                             {showDropLine && <div style={{ height: 2, background: 'var(--text-primary)', borderRadius: 1, margin: '2px 8px' }} />}
                           <div
                             draggable
@@ -771,6 +819,91 @@ export default function DayPlanSidebar({
                                   )}
                                 </div>
                               )}
+                              {/* Timing info: arrival + departure/duration */}
+                              {(() => {
+                                const timing = stopTimings?.find(st => st.assignmentId === assignment.id)
+                                if (!timing) return null
+                                const isFirst = placeIdx === 0
+
+                                return (
+                                  <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                    {/* Arrival time badge - for non-first stops */}
+                                    {!isFirst && timing.arrivalTime && (
+                                      <span style={{
+                                        display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 600,
+                                        padding: '1px 6px', borderRadius: 4,
+                                        background: 'rgba(59,130,246,0.08)', color: '#3b82f6',
+                                      }}>
+                                        <Navigation size={8} strokeWidth={2.5} />
+                                        {t('dayplan.arrival')} {formatTime(timing.arrivalTime, locale, timeFormat)}
+                                      </span>
+                                    )}
+
+                                    {/* Departure time - editable for first stop */}
+                                    {isFirst ? (
+                                      <span
+                                        style={{
+                                          display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 600,
+                                          padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
+                                          background: timing.departureTime ? 'rgba(34,197,94,0.08)' : 'rgba(0,0,0,0.04)',
+                                          color: timing.departureTime ? '#16a34a' : 'var(--text-faint)',
+                                        }}
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          const current = timing.departureTime || '09:00'
+                                          const val = prompt(t('dayplan.setDeparture') + ' (HH:MM)', current)
+                                          if (val !== null) {
+                                            const trimmed = val.trim()
+                                            if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
+                                              onUpdateAssignmentTime?.(assignment.id, { place_time: trimmed })
+                                            }
+                                          }
+                                        }}
+                                      >
+                                        <Clock size={8} strokeWidth={2.5} />
+                                        {timing.departureTime
+                                          ? `${t('dayplan.departs')} ${formatTime(timing.departureTime, locale, timeFormat)}`
+                                          : t('dayplan.setDeparture')
+                                        }
+                                      </span>
+                                    ) : (
+                                      timing.departureTime && (
+                                        <span style={{
+                                          display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 500,
+                                          padding: '1px 6px', borderRadius: 4,
+                                          background: 'rgba(34,197,94,0.06)', color: '#16a34a',
+                                        }}>
+                                          <Clock size={8} strokeWidth={2} />
+                                          {t('dayplan.departs')} {formatTime(timing.departureTime, locale, timeFormat)}
+                                        </span>
+                                      )
+                                    )}
+
+                                    {/* Duration - editable for non-first stops */}
+                                    {!isFirst && (
+                                      <span
+                                        style={{
+                                          display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 500,
+                                          padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
+                                          background: 'rgba(168,85,247,0.06)', color: '#9333ea',
+                                        }}
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          const val = prompt(t('dayplan.durationPrompt'), String(timing.durationMinutes))
+                                          if (val !== null) {
+                                            const mins = parseInt(val)
+                                            if (!isNaN(mins) && mins > 0) {
+                                              onUpdateAssignmentTime?.(assignment.id, { duration_minutes: mins })
+                                            }
+                                          }
+                                        }}
+                                      >
+                                        {timing.durationMinutes} min
+                                      </span>
+                                    )}
+                                  </div>
+                                )
+                              })()}
                             </div>
                             <div className="reorder-buttons" style={{ flexShrink: 0, display: 'flex', gap: 1, opacity: isHovered ? 1 : undefined, transition: 'opacity 0.15s' }}>
                               <button onClick={moveUp} disabled={placeIdx === 0} style={{ background: 'none', border: 'none', padding: '1px 2px', cursor: placeIdx === 0 ? 'default' : 'pointer', color: placeIdx === 0 ? 'var(--border-primary)' : 'var(--text-faint)', display: 'flex', lineHeight: 1 }}>

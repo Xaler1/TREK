@@ -97,6 +97,8 @@ export default function TripPlannerPage(): React.ReactElement | null {
   const [fitKey, setFitKey] = useState<number>(0)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<'left' | 'right' | null>(null)
   const [deletePlaceId, setDeletePlaceId] = useState<number | null>(null)
+  const [showShiftDates, setShowShiftDates] = useState<boolean>(false)
+  const [shiftDays, setShiftDays] = useState<number>(0)
 
   // Load trip + files (needed for place inspector file section)
   useEffect(() => {
@@ -128,7 +130,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
     })
   }, [places, mapCategoryFilter])
 
-  const { route, routeSegments, routeInfo, setRoute, setRouteInfo, updateRouteForDay } = useRouteCalculation(tripStore, selectedDayId)
+  const { route, routeSegments, routeInfo, stopTimings, setRoute, setRouteInfo, updateRouteForDay } = useRouteCalculation(tripStore, selectedDayId)
 
   const handleSelectDay = useCallback((dayId, skipFit) => {
     const changed = dayId !== selectedDayId
@@ -252,6 +254,25 @@ export default function TripPlannerPage(): React.ReactElement | null {
     }
     catch { toast.error(t('trip.toast.reorderError')) }
   }, [tripId, tripStore, toast])
+
+  const handleUpdateAssignmentTime = useCallback(async (assignmentId: number, data: { place_time?: string | null; duration_minutes?: number | null }) => {
+    try {
+      await assignmentsApi.updateTime(tripId, assignmentId, data)
+      await tripStore.refreshDays(tripId)
+      updateRouteForDay(selectedDayId)
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
+  }, [tripId, tripStore, toast, selectedDayId, updateRouteForDay])
+
+  const handleShiftDates = useCallback(async () => {
+    if (!shiftDays || shiftDays === 0) return
+    try {
+      await tripsApi.shiftDates(tripId, shiftDays)
+      await tripStore.loadTrip(tripId)
+      toast.success(t('trip.toast.datesShifted'))
+      setShowShiftDates(false)
+      setShiftDays(0)
+    } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
+  }, [tripId, shiftDays, tripStore, toast])
 
   const handleUpdateDayTitle = useCallback(async (dayId, title) => {
     try { await tripStore.updateDayTitle(tripId, dayId, title) }
@@ -446,6 +467,9 @@ export default function TripPlannerPage(): React.ReactElement | null {
                   onEditPlace={(place, assignmentId) => { setEditingPlace(place); setEditingAssignmentId(assignmentId || null); setShowPlaceForm(true) }}
                   onDeletePlace={(placeId) => handleDeletePlace(placeId)}
                   accommodations={tripAccommodations}
+                  stopTimings={stopTimings}
+                  onUpdateAssignmentTime={handleUpdateAssignmentTime}
+                  onShiftDates={() => setShowShiftDates(true)}
                 />
                 {!leftCollapsed && (
                   <div
@@ -602,7 +626,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
                   </div>
                   <div style={{ flex: 1, overflow: 'auto' }}>
                     {mobileSidebarOpen === 'left'
-                      ? <DayPlanSidebar tripId={tripId} trip={trip} days={days} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} selectedAssignmentId={selectedAssignmentId} onSelectDay={(id) => { handleSelectDay(id); setMobileSidebarOpen(null) }} onPlaceClick={handlePlaceClick} onReorder={handleReorder} onUpdateDayTitle={handleUpdateDayTitle} onAssignToDay={handleAssignToDay} onRouteCalculated={(r) => { if (r) { setRoute(r.coordinates); setRouteInfo({ distance: r.distanceText, duration: r.durationText }) } }} reservations={reservations} onAddReservation={(dayId) => { setEditingReservation(null); tripStore.setSelectedDay(dayId); setShowReservationModal(true); setMobileSidebarOpen(null) }} onDayDetail={(day) => { setShowDayDetail(day); setSelectedPlaceId(null); setSelectedAssignmentId(null); setMobileSidebarOpen(null) }} accommodations={tripAccommodations} />
+                      ? <DayPlanSidebar tripId={tripId} trip={trip} days={days} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} selectedAssignmentId={selectedAssignmentId} onSelectDay={(id) => { handleSelectDay(id); setMobileSidebarOpen(null) }} onPlaceClick={handlePlaceClick} onReorder={handleReorder} onUpdateDayTitle={handleUpdateDayTitle} onAssignToDay={handleAssignToDay} onRouteCalculated={(r) => { if (r) { setRoute(r.coordinates); setRouteInfo({ distance: r.distanceText, duration: r.durationText }) } else { setRoute(null); setRouteInfo(null) } }} reservations={reservations} onAddReservation={(dayId) => { setEditingReservation(null); tripStore.setSelectedDay(dayId); setShowReservationModal(true); setMobileSidebarOpen(null) }} onDayDetail={(day) => { setShowDayDetail(day); setSelectedPlaceId(null); selectAssignment(null); setMobileSidebarOpen(null) }} onRemoveAssignment={handleRemoveAssignment} onEditPlace={(place, assignmentId) => { setEditingPlace(place); setEditingAssignmentId(assignmentId || null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onDeletePlace={(placeId) => handleDeletePlace(placeId)} accommodations={tripAccommodations} stopTimings={stopTimings} onUpdateAssignmentTime={handleUpdateAssignmentTime} onShiftDates={() => setShowShiftDates(true)} />
                       : <PlacesSidebar places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} onPlaceClick={handlePlaceClick} onAddPlace={() => { setEditingPlace(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onAssignToDay={handleAssignToDay} days={days} isMobile onCategoryFilterChange={setMapCategoryFilter} />
                     }
                   </div>
@@ -675,6 +699,74 @@ export default function TripPlannerPage(): React.ReactElement | null {
       <TripFormModal isOpen={showTripForm} onClose={() => setShowTripForm(false)} onSave={async (data) => { await tripStore.updateTrip(tripId, data); toast.success(t('trip.toast.tripUpdated')) }} trip={trip} />
       <TripMembersModal isOpen={showMembersModal} onClose={() => setShowMembersModal(false)} tripId={tripId} tripTitle={trip?.title} />
       <ReservationModal isOpen={showReservationModal} onClose={() => { setShowReservationModal(false); setEditingReservation(null) }} onSave={handleSaveReservation} reservation={editingReservation} days={days} places={places} assignments={assignments} selectedDayId={selectedDayId} files={files} onFileUpload={(fd) => tripStore.addFile(tripId, fd)} onFileDelete={(id) => tripStore.deleteFile(tripId, id)} accommodations={tripAccommodations} />
+      {showShiftDates && ReactDOM.createPortal(
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(3px)',
+        }} onClick={() => setShowShiftDates(false)}>
+          <div style={{
+            width: 360, background: 'var(--bg-card)', borderRadius: 16,
+            boxShadow: '0 16px 48px rgba(0,0,0,0.22)', padding: '22px',
+            display: 'flex', flexDirection: 'column', gap: 16,
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>
+              {t('trip.shiftDates.title')}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              {t('trip.shiftDates.description')}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                {t('trip.shiftDates.days')}
+              </label>
+              <input
+                type="number"
+                value={shiftDays}
+                onChange={e => setShiftDays(parseInt(e.target.value) || 0)}
+                style={{
+                  flex: 1, fontSize: 14, border: '1px solid var(--border-primary)',
+                  borderRadius: 8, padding: '8px 12px', fontFamily: 'inherit',
+                  outline: 'none', color: 'var(--text-primary)', background: 'var(--bg-card)',
+                  textAlign: 'center',
+                }}
+                placeholder="e.g. 7 or -3"
+              />
+            </div>
+            {shiftDays !== 0 && trip?.start_date && (
+              <div style={{
+                fontSize: 11, color: 'var(--text-muted)', padding: '8px 12px',
+                background: 'var(--bg-tertiary)', borderRadius: 8, lineHeight: 1.5,
+              }}>
+                {(() => {
+                  const sd = new Date(trip.start_date + 'T00:00:00Z')
+                  sd.setUTCDate(sd.getUTCDate() + shiftDays)
+                  const ed = trip.end_date ? new Date(trip.end_date + 'T00:00:00Z') : null
+                  if (ed) ed.setUTCDate(ed.getUTCDate() + shiftDays)
+                  return `${sd.toISOString().split('T')[0]} → ${ed ? ed.toISOString().split('T')[0] : '...'}`
+                })()}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowShiftDates(false)} style={{
+                fontSize: 12, background: 'none', border: '1px solid var(--border-primary)',
+                borderRadius: 8, padding: '7px 16px', cursor: 'pointer', color: 'var(--text-muted)', fontFamily: 'inherit',
+              }}>{t('common.cancel')}</button>
+              <button
+                onClick={handleShiftDates}
+                disabled={shiftDays === 0}
+                style={{
+                  fontSize: 12, background: shiftDays === 0 ? 'var(--bg-tertiary)' : 'var(--accent)',
+                  color: shiftDays === 0 ? 'var(--text-faint)' : 'var(--accent-text)',
+                  border: 'none', borderRadius: 8, padding: '7px 18px', cursor: shiftDays === 0 ? 'default' : 'pointer',
+                  fontWeight: 600, fontFamily: 'inherit',
+                }}
+              >{t('trip.shiftDates.apply')}</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
       <ConfirmDialog
         isOpen={!!deletePlaceId}
         onClose={() => setDeletePlaceId(null)}

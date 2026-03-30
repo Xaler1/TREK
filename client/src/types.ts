@@ -51,6 +51,7 @@ export interface Place {
   osm_id: string | null
   place_time: string | null
   end_time: string | null
+  duration_minutes?: number | null
   created_at: string
 }
 
@@ -61,6 +62,7 @@ export interface Assignment {
   order_index: number
   notes: string | null
   place: Place
+  duration_minutes?: number | null
 }
 
 export interface DayNote {
@@ -177,6 +179,10 @@ export interface RouteSegment {
   mid: [number, number]
   from: [number, number]
   to: [number, number]
+  distance: number          // meters
+  duration: number          // seconds
+  distanceText: string
+  durationText: string
   walkingText: string
   drivingText: string
 }
@@ -189,6 +195,35 @@ export interface RouteResult {
   durationText: string
   walkingText: string
   drivingText: string
+}
+
+export interface DirectionsResult {
+  source: 'google' | 'osrm'
+  coordinates: [number, number][]
+  segments: DirectionsSegment[]
+  totalDistance: number
+  totalDuration: number
+}
+
+export interface DirectionsSegment {
+  from: [number, number]
+  to: [number, number]
+  mid: [number, number]
+  distance: number
+  duration: number
+  distanceText: string
+  durationText: string
+}
+
+export interface StopTiming {
+  assignmentId: number
+  arrivalTime: string | null     // HH:MM - null for first stop
+  departureTime: string | null   // HH:MM
+  durationMinutes: number
+  drivingFromPrev: number | null // seconds, null for first stop
+  distanceFromPrev: number | null // meters, null for first stop
+  drivingText: string | null
+  distanceText: string | null
 }
 
 export interface Waypoint {

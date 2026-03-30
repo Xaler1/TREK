@@ -14,7 +14,7 @@ function getAssignmentWithPlace(assignmentId: number | bigint) {
       p.lat, p.lng, p.address, p.category_id, p.price, p.currency as place_currency,
       COALESCE(da.assignment_time, p.place_time) as place_time,
       COALESCE(da.assignment_end_time, p.end_time) as end_time,
-      p.duration_minutes, p.notes as place_notes,
+      COALESCE(da.duration_minutes, p.duration_minutes) as duration_minutes, p.notes as place_notes,
       p.image_url, p.transport_mode, p.google_place_id, p.website, p.phone,
       c.name as category_name, c.color as category_color, c.icon as category_icon
     FROM day_assignments da
@@ -86,7 +86,7 @@ router.get('/trips/:tripId/days/:dayId/assignments', authenticate, requireTripAc
       p.lat, p.lng, p.address, p.category_id, p.price, p.currency as place_currency,
       COALESCE(da.assignment_time, p.place_time) as place_time,
       COALESCE(da.assignment_end_time, p.end_time) as end_time,
-      p.duration_minutes, p.notes as place_notes,
+      COALESCE(da.duration_minutes, p.duration_minutes) as duration_minutes, p.notes as place_notes,
       p.image_url, p.transport_mode, p.google_place_id, p.website, p.phone,
       c.name as category_name, c.color as category_color, c.icon as category_icon
     FROM day_assignments da
@@ -213,9 +213,15 @@ router.put('/trips/:tripId/assignments/:id/time', authenticate, requireTripAcces
   `).get(id, tripId);
   if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
 
-  const { place_time, end_time } = req.body;
-  db.prepare('UPDATE day_assignments SET assignment_time = ?, assignment_end_time = ? WHERE id = ?')
-    .run(place_time ?? null, end_time ?? null, id);
+  const { place_time, end_time, duration_minutes } = req.body;
+  const row = assignment as Record<string, unknown>;
+  db.prepare('UPDATE day_assignments SET assignment_time = ?, assignment_end_time = ?, duration_minutes = ? WHERE id = ?')
+    .run(
+      'place_time' in req.body ? (place_time ?? null) : (row.assignment_time ?? null),
+      'end_time' in req.body ? (end_time ?? null) : (row.assignment_end_time ?? null),
+      'duration_minutes' in req.body ? (duration_minutes ?? null) : (row.duration_minutes ?? null),
+      id
+    );
 
   const updated = getAssignmentWithPlace(Number(id));
   res.json({ assignment: updated });

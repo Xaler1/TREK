@@ -224,6 +224,83 @@ router.post('/:id/cover', authenticate, demoUploadBlock, uploadCover.single('cov
   res.json({ cover_image: coverUrl });
 });
 
+router.post('/:id/shift-dates', authenticate, (req: Request, res: Response) => {
+  const authReq = req as AuthRequest;
+  const access = canAccessTrip(req.params.id, authReq.user.id);
+  if (!access) return res.status(404).json({ error: 'Trip not found' });
+
+  const { shift_days } = req.body;
+  if (typeof shift_days !== 'number' || !Number.isFinite(shift_days) || shift_days === 0) {
+    return res.status(400).json({ error: 'shift_days must be a non-zero number' });
+  }
+
+  const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id) as Trip | undefined;
+  if (!trip) return res.status(404).json({ error: 'Trip not found' });
+
+  // Calculate new trip dates
+  let newStart = trip.start_date;
+  let newEnd = trip.end_date;
+
+  if (trip.start_date) {
+    const d = new Date(trip.start_date + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + shift_days);
+    newStart = d.toISOString().split('T')[0];
+  }
+  if (trip.end_date) {
+    const d = new Date(trip.end_date + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + shift_days);
+    newEnd = d.toISOString().split('T')[0];
+  }
+
+  db.exec('BEGIN');
+  try {
+    // Update trip dates
+    db.prepare('UPDATE trips SET start_date = ?, end_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(newStart, newEnd, req.params.id);
+
+    // Shift all day dates
+    const days = db.prepare('SELECT id, date FROM days WHERE trip_id = ? AND date IS NOT NULL').all(req.params.id) as { id: number; date: string }[];
+    const updateDay = db.prepare('UPDATE days SET date = ? WHERE id = ?');
+    for (const day of days) {
+      const d = new Date(day.date + 'T00:00:00Z');
+      d.setUTCDate(d.getUTCDate() + shift_days);
+      updateDay.run(d.toISOString().split('T')[0], day.id);
+    }
+
+    // Shift reservation dates
+    const reservations = db.prepare('SELECT id, reservation_time, reservation_end_time FROM reservations WHERE trip_id = ?').all(req.params.id) as { id: number; reservation_time: string | null; reservation_end_time: string | null }[];
+    const updateRes = db.prepare('UPDATE reservations SET reservation_time = ?, reservation_end_time = ? WHERE id = ?');
+    for (const r of reservations) {
+      let newResTime = r.reservation_time;
+      let newResEndTime = r.reservation_end_time;
+      if (r.reservation_time && r.reservation_time.includes('T')) {
+        const d = new Date(r.reservation_time);
+        d.setUTCDate(d.getUTCDate() + shift_days);
+        newResTime = d.toISOString();
+      }
+      if (r.reservation_end_time && r.reservation_end_time.includes('T')) {
+        const d = new Date(r.reservation_end_time);
+        d.setUTCDate(d.getUTCDate() + shift_days);
+        newResEndTime = d.toISOString();
+      }
+      if (newResTime !== r.reservation_time || newResEndTime !== r.reservation_end_time) {
+        updateRes.run(newResTime, newResEndTime, r.id);
+      }
+    }
+
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ error: 'Failed to shift dates' });
+  }
+
+  const updatedTrip = db.prepare(`${TRIP_SELECT} WHERE t.id = :tripId`).get({ userId: authReq.user.id, tripId: req.params.id });
+  const updatedDays = db.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(req.params.id);
+
+  res.json({ trip: updatedTrip, days: updatedDays });
+  broadcast(req.params.id, 'trip:updated', { trip: updatedTrip }, req.headers['x-socket-id'] as string);
+});
+
 router.delete('/:id', authenticate, (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
   if (!isOwner(req.params.id, authReq.user.id))

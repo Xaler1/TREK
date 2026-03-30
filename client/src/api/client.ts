@@ -75,6 +75,7 @@ export const tripsApi = {
   getMembers: (id: number | string) => apiClient.get(`/trips/${id}/members`).then(r => r.data),
   addMember: (id: number | string, identifier: string) => apiClient.post(`/trips/${id}/members`, { identifier }).then(r => r.data),
   removeMember: (id: number | string, userId: number) => apiClient.delete(`/trips/${id}/members/${userId}`).then(r => r.data),
+  shiftDates: (id: number | string, shiftDays: number) => apiClient.post(`/trips/${id}/shift-dates`, { shift_days: shiftDays }).then(r => r.data),
 }
 
 export const daysApi = {
@@ -174,6 +175,8 @@ export const mapsApi = {
   details: (placeId: string, lang?: string) => apiClient.get(`/maps/details/${encodeURIComponent(placeId)}`, { params: { lang } }).then(r => r.data),
   placePhoto: (placeId: string, lat?: number, lng?: number, name?: string) => apiClient.get(`/maps/place-photo/${encodeURIComponent(placeId)}`, { params: { lat, lng, name } }).then(r => r.data),
   reverse: (lat: number, lng: number, lang?: string) => apiClient.get('/maps/reverse', { params: { lat, lng, lang } }).then(r => r.data),
+  directions: (waypoints: Array<{lat: number; lng: number}>, profile = 'driving') =>
+    apiClient.post('/maps/directions', { waypoints, profile }).then(r => r.data),
 }
 
 export const budgetApi = {

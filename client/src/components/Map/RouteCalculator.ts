@@ -116,6 +116,10 @@ export async function calculateSegments(
     const walkingDuration = leg.distance / (5000 / 3600)
     return {
       mid, from, to,
+      distance: leg.distance,
+      duration: leg.duration,
+      distanceText: formatDistance(leg.distance),
+      durationText: formatDuration(leg.duration),
       walkingText: formatDuration(walkingDuration),
       drivingText: formatDuration(leg.duration),
     }

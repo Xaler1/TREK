@@ -114,7 +114,7 @@ interface PlaceInspectorProps {
   onEdit: () => void
   onDelete: () => void
   onAssignToDay: (placeId: number, dayId: number) => void
-  onRemoveAssignment: (assignmentId: number, dayId: number) => void
+  onRemoveAssignment: (dayId: number, assignmentId: number) => void
   files: TripFile[]
   onFileUpload: (fd: FormData) => Promise<void>
   tripMembers?: TripMember[]
