@@ -35,12 +35,7 @@ router.get('/', authenticate, (req: Request, res: Response) => {
 router.post('/', authenticate, (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
   const { tripId } = req.params;
-  const { title, reservation_time, reservation_end_time, location, confirmation_number, notes, day_id, place_id, assignment_id, status, type, accommodation_id, metadata, create_accommodation } = req.body;
-
-  const trip = verifyTripOwnership(tripId, authReq.user.id);
-  if (!trip) return res.status(404).json({ error: 'Trip not found' });
-
-  if (!title) return res.status(400).json({ error: 'Title is required' });
+  const { title, reservation_time, reservation_end_time, location, confirmation_number, notes, day_id, place_id, assignment_id, status, type, accommodation_id, metadata, create_accommodation, price } = req.body;
 
   // Auto-create accommodation for hotel reservations
   let resolvedAccommodationId = accommodation_id || null;
@@ -55,9 +50,20 @@ router.post('/', authenticate, (req: Request, res: Response) => {
     }
   }
 
+  // Auto-create budget item if price is set
+  let budgetItemId: number | null = null;
+  const priceValue = price ? parseFloat(price) : null;
+  if (priceValue && priceValue > 0) {
+    const category = (type || 'other').charAt(0).toUpperCase() + (type || 'other').slice(1);
+    const budgetResult = db.prepare(
+      'INSERT INTO budget_items (trip_id, category, name, total_price, persons, days, sort_order) VALUES (?, ?, ?, ?, 1, 1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM budget_items WHERE trip_id = ?))'
+    ).run(tripId, category, title || 'Reservation', priceValue, tripId);
+    budgetItemId = budgetResult.lastInsertRowid as number;
+  }
+
   const result = db.prepare(`
-    INSERT INTO reservations (trip_id, day_id, place_id, assignment_id, title, reservation_time, reservation_end_time, location, confirmation_number, notes, status, type, accommodation_id, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO reservations (trip_id, day_id, place_id, assignment_id, title, reservation_time, reservation_end_time, location, confirmation_number, notes, status, type, accommodation_id, metadata, price, budget_item_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     tripId,
     day_id || null,
@@ -72,7 +78,9 @@ router.post('/', authenticate, (req: Request, res: Response) => {
     status || 'pending',
     type || 'other',
     resolvedAccommodationId,
-    metadata ? JSON.stringify(metadata) : null
+    metadata ? JSON.stringify(metadata) : null,
+    priceValue,
+    budgetItemId
   );
 
   // Sync check-in/out to accommodation if linked
@@ -101,12 +109,15 @@ router.post('/', authenticate, (req: Request, res: Response) => {
 
   res.status(201).json({ reservation });
   broadcast(tripId, 'reservation:created', { reservation }, req.headers['x-socket-id'] as string);
+  if (budgetItemId) {
+    broadcast(tripId, 'budget:updated', {}, req.headers['x-socket-id'] as string);
+  }
 });
 
 router.put('/:id', authenticate, (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
   const { tripId, id } = req.params;
-  const { title, reservation_time, reservation_end_time, location, confirmation_number, notes, day_id, place_id, assignment_id, status, type, accommodation_id, metadata, create_accommodation } = req.body;
+  const { title, reservation_time, reservation_end_time, location, confirmation_number, notes, day_id, place_id, assignment_id, status, type, accommodation_id, metadata, create_accommodation, price } = req.body;
 
   const trip = verifyTripOwnership(tripId, authReq.user.id);
   if (!trip) return res.status(404).json({ error: 'Trip not found' });
@@ -132,6 +143,8 @@ router.put('/:id', authenticate, (req: Request, res: Response) => {
     }
   }
 
+  const resolvedPrice = price !== undefined ? (price ? parseFloat(price) : null) : reservation.price;
+
   db.prepare(`
     UPDATE reservations SET
       title = COALESCE(?, title),
@@ -146,7 +159,8 @@ router.put('/:id', authenticate, (req: Request, res: Response) => {
       status = COALESCE(?, status),
       type = COALESCE(?, type),
       accommodation_id = ?,
-      metadata = ?
+      metadata = ?,
+      price = ?
     WHERE id = ?
   `).run(
     title || null,
@@ -162,8 +176,36 @@ router.put('/:id', authenticate, (req: Request, res: Response) => {
     type || null,
     resolvedAccId,
     metadata !== undefined ? (metadata ? JSON.stringify(metadata) : null) : reservation.metadata,
+    resolvedPrice,
     id
   );
+
+  // Sync budget item with price
+  const resolvedTitle = title || reservation.title;
+  const resolvedType = type || reservation.type || 'other';
+  const category = resolvedType.charAt(0).toUpperCase() + resolvedType.slice(1);
+  let budgetChanged = false;
+
+  if (resolvedPrice && resolvedPrice > 0) {
+    if (reservation.budget_item_id) {
+      // Update existing budget item
+      db.prepare('UPDATE budget_items SET name = ?, total_price = ?, category = ? WHERE id = ?')
+        .run(resolvedTitle || 'Reservation', resolvedPrice, category, reservation.budget_item_id);
+      budgetChanged = true;
+    } else {
+      // Create new budget item
+      const budgetResult = db.prepare(
+        'INSERT INTO budget_items (trip_id, category, name, total_price, persons, days, sort_order) VALUES (?, ?, ?, ?, 1, 1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM budget_items WHERE trip_id = ?))'
+      ).run(tripId, category, resolvedTitle || 'Reservation', resolvedPrice, tripId);
+      db.prepare('UPDATE reservations SET budget_item_id = ? WHERE id = ?').run(budgetResult.lastInsertRowid, id);
+      budgetChanged = true;
+    }
+  } else if (reservation.budget_item_id) {
+    // Price cleared — remove budget item
+    db.prepare('DELETE FROM budget_items WHERE id = ?').run(reservation.budget_item_id);
+    db.prepare('UPDATE reservations SET budget_item_id = NULL WHERE id = ?').run(id);
+    budgetChanged = true;
+  }
 
   // Sync check-in/out to accommodation if linked
   const resolvedMeta = metadata !== undefined ? metadata : (reservation.metadata ? JSON.parse(reservation.metadata as string) : null);
@@ -193,6 +235,9 @@ router.put('/:id', authenticate, (req: Request, res: Response) => {
 
   res.json({ reservation: updated });
   broadcast(tripId, 'reservation:updated', { reservation: updated }, req.headers['x-socket-id'] as string);
+  if (budgetChanged) {
+    broadcast(tripId, 'budget:updated', {}, req.headers['x-socket-id'] as string);
+  }
 });
 
 router.delete('/:id', authenticate, (req: Request, res: Response) => {
@@ -202,8 +247,13 @@ router.delete('/:id', authenticate, (req: Request, res: Response) => {
   const trip = verifyTripOwnership(tripId, authReq.user.id);
   if (!trip) return res.status(404).json({ error: 'Trip not found' });
 
-  const reservation = db.prepare('SELECT id, accommodation_id FROM reservations WHERE id = ? AND trip_id = ?').get(id, tripId) as { id: number; accommodation_id: number | null } | undefined;
+  const reservation = db.prepare('SELECT id, accommodation_id, budget_item_id FROM reservations WHERE id = ? AND trip_id = ?').get(id, tripId) as { id: number; accommodation_id: number | null; budget_item_id: number | null } | undefined;
   if (!reservation) return res.status(404).json({ error: 'Reservation not found' });
+
+  // Delete linked budget item if exists
+  if (reservation.budget_item_id) {
+    db.prepare('DELETE FROM budget_items WHERE id = ?').run(reservation.budget_item_id);
+  }
 
   // Delete linked accommodation if exists
   if (reservation.accommodation_id) {
@@ -214,6 +264,9 @@ router.delete('/:id', authenticate, (req: Request, res: Response) => {
   db.prepare('DELETE FROM reservations WHERE id = ?').run(id);
   res.json({ success: true });
   broadcast(tripId, 'reservation:deleted', { reservationId: Number(id) }, req.headers['x-socket-id'] as string);
+  if (reservation.budget_item_id) {
+    broadcast(tripId, 'budget:updated', {}, req.headers['x-socket-id'] as string);
+  }
 });
 
 export default router;

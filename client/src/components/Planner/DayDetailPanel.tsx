@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import ReactDOM from 'react-dom'
-import { X, Sun, Cloud, CloudRain, CloudSnow, CloudDrizzle, CloudLightning, Wind, Droplets, Sunrise, Sunset, Hotel, Calendar, MapPin, LogIn, LogOut, Hash, Pencil, Plane, Utensils, Train, Car, Ship, Ticket, FileText, Users } from 'lucide-react'
+import { X, Sun, Cloud, CloudRain, CloudSnow, CloudDrizzle, CloudLightning, Wind, Droplets, Sunrise, Sunset, Hotel, Calendar, MapPin, LogIn, LogOut, Hash, Pencil, Plane, Utensils, Train, Car, Ship, Ticket, FileText, Users, Banknote } from 'lucide-react'
 
 const RES_TYPE_ICONS = { flight: Plane, hotel: Hotel, restaurant: Utensils, train: Train, car: Car, cruise: Ship, event: Ticket, tour: Users, other: FileText }
 const RES_TYPE_COLORS = { flight: '#3b82f6', hotel: '#8b5cf6', restaurant: '#ef4444', train: '#06b6d4', car: '#6b7280', cruise: '#0ea5e9', event: '#f59e0b', tour: '#10b981', other: '#6b7280' }
@@ -359,6 +359,40 @@ export default function DayDetailPanel({ day, days, places, categories = [], tri
                             </div>
                           </div>
                         )}
+                      </div>
+                      {/* Price per night */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '0 12px 8px' }}>
+                        <span
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 500,
+                            padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
+                            background: acc.price ? 'rgba(234,179,8,0.08)' : 'rgba(0,0,0,0.04)',
+                            color: acc.price ? '#ca8a04' : 'var(--text-faint)',
+                          }}
+                          onClick={async () => {
+                            const current = acc.price ? String(acc.price) : ''
+                            const val = prompt(t('dayplan.accommodation.pricePrompt'), current)
+                            if (val !== null) {
+                              const num = parseFloat(val.replace(',', '.'))
+                              try {
+                                await accommodationsApi.setPrice(tripId, acc.id, isNaN(num) || num <= 0 ? null : num)
+                                const data = await accommodationsApi.list(tripId)
+                                setAccommodations(data.accommodations || [])
+                                const allForDay = (data.accommodations || []).filter((a: any) =>
+                                  days.some((d: any) => d.id >= a.start_day_id && d.id <= a.end_day_id && d.id === day?.id)
+                                )
+                                setDayAccommodations(allForDay)
+                                setAccommodation(allForDay[0] || null)
+                              } catch {}
+                            }
+                          }}
+                        >
+                          <Banknote size={10} />
+                          {acc.price
+                            ? `${Number(acc.price).toFixed(2)}${t('dayplan.accommodation.pricePerNight')}`
+                            : t('dayplan.setPrice')
+                          }
+                        </span>
                       </div>
                       {/* Linked booking */}
                       {linked && (

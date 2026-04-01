@@ -638,6 +638,13 @@ const en: Record<string, string | { name: string; category: string }[]> = {
   'dayplan.departs': 'Depart',
   'dayplan.setDeparture': 'Set departure time',
   'dayplan.durationPrompt': 'Time spent (minutes)',
+  'dayplan.lateArrival': 'Late! Event starts',
+  'dayplan.eventEnd': 'Event ends',
+  'dayplan.setPrice': 'Set price',
+  'dayplan.pricePrompt': 'Price for this location',
+  'dayplan.accommodation.pricePrompt': 'Price per night',
+  'dayplan.accommodation.pricePerNight': '/night',
+  'dayplan.priceBudgetHint': 'This price will be added to the trip budget automatically.',
 
   // Places Sidebar
   'places.addPlace': 'Add Place/Activity',
@@ -771,6 +778,10 @@ const en: Record<string, string | { name: string; category: string }[]> = {
   'reservations.linkAssignment': 'Link to day assignment',
   'reservations.pickAssignment': 'Select an assignment from your plan...',
   'reservations.noAssignment': 'No link (standalone)',
+  'reservations.price': 'Price',
+  'reservations.priceBudgetHint': 'Automatically added to trip budget.',
+  'reservations.linkPlace': 'Linked place',
+  'reservations.pickPlace': 'Select a place...',
 
   // Budget
   'budget.title': 'Budget',

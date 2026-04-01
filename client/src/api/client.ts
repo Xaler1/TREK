@@ -104,6 +104,7 @@ export const assignmentsApi = {
   getParticipants: (tripId: number | string, id: number) => apiClient.get(`/trips/${tripId}/assignments/${id}/participants`).then(r => r.data),
   setParticipants: (tripId: number | string, id: number, userIds: number[]) => apiClient.put(`/trips/${tripId}/assignments/${id}/participants`, { user_ids: userIds }).then(r => r.data),
   updateTime: (tripId: number | string, id: number, times: Record<string, unknown>) => apiClient.put(`/trips/${tripId}/assignments/${id}/time`, times).then(r => r.data),
+  setPrice: (tripId: number | string, id: number, price: number | null) => apiClient.put(`/trips/${tripId}/assignments/${id}/price`, { price }).then(r => r.data),
 }
 
 export const packingApi = {
@@ -228,6 +229,7 @@ export const accommodationsApi = {
   create: (tripId: number | string, data: Record<string, unknown>) => apiClient.post(`/trips/${tripId}/accommodations`, data).then(r => r.data),
   update: (tripId: number | string, id: number, data: Record<string, unknown>) => apiClient.put(`/trips/${tripId}/accommodations/${id}`, data).then(r => r.data),
   delete: (tripId: number | string, id: number) => apiClient.delete(`/trips/${tripId}/accommodations/${id}`).then(r => r.data),
+  setPrice: (tripId: number | string, id: number, price: number | null) => apiClient.put(`/trips/${tripId}/accommodations/${id}/price`, { price }).then(r => r.data),
 }
 
 export const dayNotesApi = {

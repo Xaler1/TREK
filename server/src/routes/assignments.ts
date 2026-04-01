@@ -10,7 +10,7 @@ const router = express.Router({ mergeParams: true });
 
 function getAssignmentWithPlace(assignmentId: number | bigint) {
   const a = db.prepare(`
-    SELECT da.*, p.id as place_id, p.name as place_name, p.description as place_description,
+    SELECT da.*, da.budget_item_id, p.id as place_id, p.name as place_name, p.description as place_description,
       p.lat, p.lng, p.address, p.category_id, p.price, p.currency as place_currency,
       COALESCE(da.assignment_time, p.place_time) as place_time,
       COALESCE(da.assignment_end_time, p.end_time) as end_time,
@@ -140,6 +140,12 @@ router.delete('/trips/:tripId/days/:dayId/assignments/:id', authenticate, requir
 
   if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
 
+  // Before the actual delete, check for budget_item_id
+  const assignmentToDelete = db.prepare('SELECT budget_item_id FROM day_assignments WHERE id = ?').get(id) as Record<string, any> | undefined;
+  if (assignmentToDelete?.budget_item_id) {
+    db.prepare('DELETE FROM budget_items WHERE id = ?').run(assignmentToDelete.budget_item_id);
+  }
+
   db.prepare('DELETE FROM day_assignments WHERE id = ?').run(id);
   res.json({ success: true });
   broadcast(tripId, 'assignment:deleted', { assignmentId: Number(id), dayId: Number(dayId) }, req.headers['x-socket-id'] as string);
@@ -249,6 +255,52 @@ router.put('/trips/:tripId/assignments/:id/participants', authenticate, requireT
 
   res.json({ participants });
   broadcast(Number(tripId), 'assignment:participants', { assignmentId: Number(id), participants }, req.headers['x-socket-id'] as string);
+});
+
+// Set price for an assignment and auto-manage linked budget item
+router.put('/trips/:tripId/assignments/:id/price', authenticate, requireTripAccess, (req: Request, res: Response) => {
+  const { tripId, id } = req.params;
+  const { price } = req.body;
+
+  const assignment = db.prepare(`
+    SELECT da.*, p.name as place_name, p.category_id,
+      COALESCE(da.duration_minutes, p.duration_minutes) as duration_minutes,
+      c.name as category_name
+    FROM day_assignments da
+    JOIN places p ON da.place_id = p.id
+    LEFT JOIN categories c ON p.category_id = c.id
+    WHERE da.id = ? AND da.day_id IN (SELECT id FROM days WHERE trip_id = ?)
+  `).get(id, tripId) as Record<string, any> | undefined;
+  if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
+
+  const numericPrice = typeof price === 'number' && isFinite(price) && price > 0 ? price : null;
+
+  if (numericPrice !== null) {
+    const categoryName = assignment.category_name || 'Other';
+    if (assignment.budget_item_id) {
+      // Update existing budget item
+      db.prepare('UPDATE budget_items SET total_price = ?, name = ?, category = ? WHERE id = ?')
+        .run(numericPrice, assignment.place_name, categoryName, assignment.budget_item_id);
+    } else {
+      // Create new budget item
+      const maxOrder = (db.prepare('SELECT MAX(sort_order) as max_order FROM budget_items WHERE trip_id = ?').get(tripId) as any)?.max_order || 0;
+      const result = db.prepare('INSERT INTO budget_items (trip_id, category, name, total_price, sort_order) VALUES (?, ?, ?, ?, ?)')
+        .run(tripId, categoryName, assignment.place_name, numericPrice, maxOrder + 1);
+      db.prepare('UPDATE day_assignments SET budget_item_id = ? WHERE id = ?')
+        .run(result.lastInsertRowid, id);
+    }
+  } else {
+    // Remove linked budget item
+    if (assignment.budget_item_id) {
+      db.prepare('DELETE FROM budget_items WHERE id = ?').run(assignment.budget_item_id);
+      db.prepare('UPDATE day_assignments SET budget_item_id = NULL WHERE id = ?').run(id);
+    }
+  }
+
+  const updated = getAssignmentWithPlace(Number(id));
+  broadcast(Number(tripId), 'assignment:updated', { assignment: updated }, req.headers['x-socket-id'] as string);
+  broadcast(Number(tripId), 'budget:updated', {}, req.headers['x-socket-id'] as string);
+  res.json({ assignment: updated });
 });
 
 export default router;

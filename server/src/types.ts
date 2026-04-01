@@ -98,6 +98,8 @@ export interface DayAssignment {
   reservation_datetime?: string | null;
   assignment_time?: string | null;
   assignment_end_time?: string | null;
+  duration_minutes?: number | null;
+  budget_item_id?: number | null;
   created_at?: string;
 }
 
@@ -150,6 +152,8 @@ export interface Reservation {
   type: string;
   accommodation_id?: number | null;
   metadata?: string | null;
+  price?: number | null;
+  budget_item_id?: number | null;
   created_at?: string;
   day_number?: number;
   place_name?: string;

@@ -112,10 +112,10 @@ function ReservationCard({ r, tripId, onEdit, onDelete, files = [], onNavigateTo
       </div>
 
       {/* Details */}
-      {(r.reservation_time || r.confirmation_number || r.location || linked || r.metadata) && (
+      {(r.reservation_time || r.confirmation_number || r.location || linked || r.metadata || r.price || r.place_name) && (
         <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           {/* Row 1: Date, Time, Code */}
-          {(r.reservation_time || r.confirmation_number) && (
+          {(r.reservation_time || r.confirmation_number || r.price) && (
             <div style={{ display: 'flex', gap: 0, borderRadius: 8, overflow: 'hidden', background: 'var(--bg-secondary)', boxShadow: '0 1px 6px rgba(0,0,0,0.08)' }}>
               {r.reservation_time && (
                 <div style={{ flex: 1, padding: '5px 10px', textAlign: 'center', borderRight: '1px solid var(--border-faint)' }}>
@@ -135,6 +135,12 @@ function ReservationCard({ r, tripId, onEdit, onDelete, files = [], onNavigateTo
                 <div style={{ flex: 1, padding: '5px 10px', textAlign: 'center' }}>
                   <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{t('reservations.confirmationCode')}</div>
                   <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', marginTop: 1 }}>{r.confirmation_number}</div>
+                </div>
+              )}
+              {r.price && (
+                <div style={{ flex: 1, padding: '5px 10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{t('reservations.price')}</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#059669', marginTop: 1 }}>{Number(r.price).toFixed(2)}</div>
                 </div>
               )}
             </div>
@@ -166,8 +172,8 @@ function ReservationCard({ r, tripId, onEdit, onDelete, files = [], onNavigateTo
             )
           })()}
           {/* Row 2: Location + Assignment */}
-          {(r.location || linked || r.accommodation_name) && (
-            <div className={`grid grid-cols-1 ${r.location && linked ? 'sm:grid-cols-2' : ''} gap-2`} style={{ paddingTop: 6, borderTop: '1px solid var(--border-faint)' }}>
+          {(r.location || linked || r.accommodation_name || r.place_name) && (
+            <div className={`grid grid-cols-1 ${(r.location && (linked || r.place_name)) ? 'sm:grid-cols-2' : ''} gap-2`} style={{ paddingTop: 6, borderTop: '1px solid var(--border-faint)' }}>
               {r.location && (
                 <div>
                   <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 3 }}>{t('reservations.locationAddress')}</div>
@@ -188,13 +194,22 @@ function ReservationCard({ r, tripId, onEdit, onDelete, files = [], onNavigateTo
               )}
               {linked && (
                 <div>
-                  <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 3 }}>{t('reservations.linkAssignment')}</div>
+                  <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 3 }}>{t('reservations.linkPlace')}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 8px', borderRadius: 7, background: 'var(--bg-secondary)', fontSize: 11, color: 'var(--text-muted)' }}>
                     <Link2 size={10} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {linked.dayTitle || t('dayplan.dayN', { n: linked.dayNumber })} — {linked.placeName}
                       {linked.startTime ? ` · ${linked.startTime}${linked.endTime ? ' – ' + linked.endTime : ''}` : ''}
                     </span>
+                  </div>
+                </div>
+              )}
+              {!linked && r.place_name && (
+                <div>
+                  <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 3 }}>{t('reservations.linkPlace')}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 8px', borderRadius: 7, background: 'var(--bg-secondary)', fontSize: 11, color: 'var(--text-muted)' }}>
+                    <Link2 size={10} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.place_name}</span>
                   </div>
                 </div>
               )}

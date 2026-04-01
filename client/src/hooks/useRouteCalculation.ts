@@ -12,6 +12,11 @@ function addMinutesToTime(timeStr: string, minutes: number): string {
   return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`
 }
 
+function timeToMinutes(timeStr: string): number {
+  const [h, m] = timeStr.split(':').map(Number)
+  return h * 60 + m
+}
+
 /**
  * Manages route calculation state for a selected day. Extracts geo-coded waypoints from
  * day assignments, draws a straight-line route, and optionally fetches per-segment
@@ -27,13 +32,12 @@ export function useRouteCalculation(tripStore: TripStoreState, selectedDayId: nu
   const routeAbortRef = useRef<AbortController | null>(null)
 
   const computeTimings = useCallback((
-    assignments: Array<{ id: number; place: { lat?: number | null; lng?: number | null; place_time?: string | null; duration_minutes?: number | null }; duration_minutes?: number | null }>,
+    assignments: Array<{ id: number; place: { lat?: number | null; lng?: number | null; place_time?: string | null; end_time?: string | null; duration_minutes?: number | null }; duration_minutes?: number | null }>,
     segments: RouteSegment[]
   ): StopTiming[] => {
     if (assignments.length === 0) return []
 
     const timings: StopTiming[] = []
-    // Get geo-assignments (those that have coordinates and appear in route)
     const geoAssignments = assignments.filter(a => a.place?.lat && a.place?.lng)
 
     // First stop: departure time comes from assignment's place_time
@@ -46,21 +50,41 @@ export function useRouteCalculation(tripStore: TripStoreState, selectedDayId: nu
       const isLast = i === geoAssignments.length - 1
       const durationMin = a.duration_minutes ?? a.place?.duration_minutes ?? 60
       const seg = i > 0 ? segments[i - 1] : null
+      const endTime = a.place?.end_time || null
 
       let arrivalTime: string | null = null
       let departureTime: string | null = null
+      let lateArrival = false
+      let eventStartTime: string | null = null
 
       if (i === 0) {
-        // First stop: user sets departure time directly
-        departureTime = currentTime
+        // First stop: departure = user-set time or end_time if event
+        departureTime = endTime || currentTime
+        if (endTime && a.place?.place_time) {
+          eventStartTime = a.place.place_time
+        }
       } else {
         // Subsequent stops: arrival = previous departure + driving time
         if (currentTime && seg) {
           const drivingMin = Math.ceil(seg.duration / 60)
           arrivalTime = addMinutesToTime(currentTime, drivingMin)
-          // Last stop: only arrival, no departure
+
+          // Check for late arrival: if place has a start time and we arrive after it
+          const placeStartTime = a.place?.place_time || null
+          if (placeStartTime && arrivalTime) {
+            eventStartTime = placeStartTime
+            if (timeToMinutes(arrivalTime) > timeToMinutes(placeStartTime)) {
+              lateArrival = true
+            }
+          }
+
           if (!isLast) {
-            departureTime = addMinutesToTime(arrivalTime, durationMin)
+            if (endTime) {
+              // Event with end time: departure = end_time (ignore duration)
+              departureTime = endTime
+            } else {
+              departureTime = addMinutesToTime(arrivalTime, durationMin)
+            }
           }
         }
       }
@@ -76,6 +100,9 @@ export function useRouteCalculation(tripStore: TripStoreState, selectedDayId: nu
         distanceFromPrev: seg ? seg.distance : null,
         drivingText: seg ? seg.drivingText : null,
         distanceText: seg ? seg.distanceText : null,
+        lateArrival,
+        eventStartTime,
+        eventEndTime: endTime,
       })
     }
 

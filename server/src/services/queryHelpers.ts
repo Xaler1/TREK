@@ -60,6 +60,7 @@ function formatAssignmentWithPlace(a: AssignmentRow, tags: Partial<Tag>[], parti
     notes: a.notes,
     participants: participants || [],
     created_at: a.created_at,
+    budget_item_id: a.budget_item_id,
     place: {
       id: a.place_id,
       name: a.place_name,

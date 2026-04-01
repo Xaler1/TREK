@@ -259,9 +259,9 @@ export default function TripPlannerPage(): React.ReactElement | null {
     try {
       await assignmentsApi.updateTime(tripId, assignmentId, data)
       await tripStore.refreshDays(tripId)
-      updateRouteForDay(selectedDayId)
+      // Route recalculation triggers automatically via useEffect watching tripStore.assignments
     } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
-  }, [tripId, tripStore, toast, selectedDayId, updateRouteForDay])
+  }, [tripId, tripStore, toast])
 
   const handleShiftDates = useCallback(async () => {
     if (!shiftDays || shiftDays === 0) return
@@ -288,6 +288,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
         if (data.type === 'hotel') {
           accommodationsApi.list(tripId).then(d => setTripAccommodations(d.accommodations || [])).catch(() => {})
         }
+        await tripStore.loadBudgetItems(tripId)
         return r
       } else {
         const r = await tripStore.addReservation(tripId, { ...data, day_id: selectedDayId || null })
@@ -297,6 +298,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
         if (data.type === 'hotel') {
           accommodationsApi.list(tripId).then(d => setTripAccommodations(d.accommodations || [])).catch(() => {})
         }
+        await tripStore.loadBudgetItems(tripId)
         return r
       }
     } catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
@@ -308,6 +310,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
       toast.success(t('trip.toast.deleted'))
       // Refresh accommodations in case a hotel booking was deleted
       accommodationsApi.list(tripId).then(d => setTripAccommodations(d.accommodations || [])).catch(() => {})
+      await tripStore.loadBudgetItems(tripId)
     }
     catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
   }
@@ -698,7 +701,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
       <PlaceFormModal isOpen={showPlaceForm} onClose={() => { setShowPlaceForm(false); setEditingPlace(null); setEditingAssignmentId(null); setPrefillCoords(null) }} onSave={handleSavePlace} place={editingPlace} prefillCoords={prefillCoords} assignmentId={editingAssignmentId} dayAssignments={editingAssignmentId ? Object.values(assignments).flat() : []} tripId={tripId} categories={categories} onCategoryCreated={cat => tripStore.addCategory?.(cat)} />
       <TripFormModal isOpen={showTripForm} onClose={() => setShowTripForm(false)} onSave={async (data) => { await tripStore.updateTrip(tripId, data); toast.success(t('trip.toast.tripUpdated')) }} trip={trip} />
       <TripMembersModal isOpen={showMembersModal} onClose={() => setShowMembersModal(false)} tripId={tripId} tripTitle={trip?.title} />
-      <ReservationModal isOpen={showReservationModal} onClose={() => { setShowReservationModal(false); setEditingReservation(null) }} onSave={handleSaveReservation} reservation={editingReservation} days={days} places={places} assignments={assignments} selectedDayId={selectedDayId} files={files} onFileUpload={(fd) => tripStore.addFile(tripId, fd)} onFileDelete={(id) => tripStore.deleteFile(tripId, id)} accommodations={tripAccommodations} />
+      <ReservationModal isOpen={showReservationModal} onClose={() => { setShowReservationModal(false); setEditingReservation(null) }} onSave={handleSaveReservation} reservation={editingReservation} days={days} places={places} selectedDayId={selectedDayId} files={files} onFileUpload={(fd) => tripStore.addFile(tripId, fd)} onFileDelete={(id) => tripStore.deleteFile(tripId, id)} accommodations={tripAccommodations} />
       {showShiftDates && ReactDOM.createPortal(
         <div style={{
           position: 'fixed', inset: 0, zIndex: 1000,

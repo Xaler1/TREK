@@ -775,7 +775,10 @@ export default function DayPlanSidebar({
                                 </div>
                               )}
                               {(() => {
-                                const res = reservations.find(r => r.assignment_id === assignment.id)
+                                const res = reservations.find(r =>
+                                  (r.assignment_id && r.assignment_id === assignment.id) ||
+                                  (r.place_id && r.place_id === place.id)
+                                )
                                 if (!res) return null
                                 const confirmed = res.status === 'confirmed'
                                 return (
@@ -799,6 +802,11 @@ export default function DayPlanSidebar({
                                       if (meta.train_number) return <span style={{ fontWeight: 400 }}>{meta.train_number}</span>
                                       return null
                                     })()}
+                                    {res.price && (
+                                      <span style={{ fontWeight: 500 }}>
+                                        {Number(res.price).toFixed(2)} {currency}
+                                      </span>
+                                    )}
                                   </div>
                                 )
                               })()}
@@ -840,6 +848,18 @@ export default function DayPlanSidebar({
                                       </span>
                                     )}
 
+                                    {/* Late arrival warning */}
+                                    {timing.lateArrival && timing.eventStartTime && (
+                                      <span style={{
+                                        display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 600,
+                                        padding: '1px 6px', borderRadius: 4,
+                                        background: 'rgba(239,68,68,0.08)', color: '#ef4444',
+                                      }}>
+                                        <AlertTriangle size={8} strokeWidth={2.5} />
+                                        {t('dayplan.lateArrival')} {formatTime(timing.eventStartTime, locale, timeFormat)}
+                                      </span>
+                                    )}
+
                                     {/* Departure time - editable for first stop */}
                                     {isFirst ? (
                                       <span
@@ -872,16 +892,20 @@ export default function DayPlanSidebar({
                                         <span style={{
                                           display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 500,
                                           padding: '1px 6px', borderRadius: 4,
-                                          background: 'rgba(34,197,94,0.06)', color: '#16a34a',
+                                          background: timing.eventEndTime ? 'rgba(168,85,247,0.06)' : 'rgba(34,197,94,0.06)',
+                                          color: timing.eventEndTime ? '#9333ea' : '#16a34a',
                                         }}>
                                           <Clock size={8} strokeWidth={2} />
-                                          {t('dayplan.departs')} {formatTime(timing.departureTime, locale, timeFormat)}
+                                          {timing.eventEndTime
+                                            ? `${t('dayplan.eventEnd')} ${formatTime(timing.departureTime, locale, timeFormat)}`
+                                            : `${t('dayplan.departs')} ${formatTime(timing.departureTime, locale, timeFormat)}`
+                                          }
                                         </span>
                                       )
                                     )}
 
                                     {/* Duration - editable for non-first, non-last stops */}
-                                    {!isFirst && !isLast && (
+                                    {!isFirst && !isLast && !timing.eventEndTime && (
                                       <span
                                         style={{
                                           display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9.5, fontWeight: 500,
@@ -902,6 +926,7 @@ export default function DayPlanSidebar({
                                         {timing.durationMinutes} min
                                       </span>
                                     )}
+
                                   </div>
                                 )
                               })()}

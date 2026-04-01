@@ -127,7 +127,18 @@ export interface Reservation {
   confirmation_number: string | null
   notes: string | null
   url: string | null
+  place_id?: number | null
+  assignment_id?: number | null
+  day_id?: number | null
+  day_number?: number | null
+  place_name?: string | null
+  reservation_time?: string | null
+  reservation_end_time?: string | null
+  location?: string | null
   accommodation_id?: number | null
+  accommodation_name?: string | null
+  price?: number | null
+  budget_item_id?: number | null
   metadata?: Record<string, string> | null
   created_at: string
 }
@@ -224,6 +235,9 @@ export interface StopTiming {
   distanceFromPrev: number | null // meters, null for first stop
   drivingText: string | null
   distanceText: string | null
+  lateArrival: boolean           // true if arrival > event start time
+  eventStartTime: string | null  // HH:MM - event start (place_time for non-first stops)
+  eventEndTime: string | null    // HH:MM - event end (end_time), used as departure
 }
 
 export interface Waypoint {

@@ -324,6 +324,17 @@ function runMigrations(db: Database.Database): void {
     () => {
       try { db.exec('ALTER TABLE day_assignments ADD COLUMN duration_minutes INTEGER'); } catch {}
     },
+    () => {
+      try { db.exec('ALTER TABLE day_assignments ADD COLUMN budget_item_id INTEGER REFERENCES budget_items(id) ON DELETE SET NULL'); } catch {}
+    },
+    () => {
+      try { db.exec('ALTER TABLE day_accommodations ADD COLUMN budget_item_id INTEGER REFERENCES budget_items(id) ON DELETE SET NULL'); } catch {}
+      try { db.exec('ALTER TABLE day_accommodations ADD COLUMN price REAL'); } catch {}
+    },
+    () => {
+      try { db.exec('ALTER TABLE reservations ADD COLUMN price REAL'); } catch {}
+      try { db.exec('ALTER TABLE reservations ADD COLUMN budget_item_id INTEGER REFERENCES budget_items(id) ON DELETE SET NULL'); } catch {}
+    },
   ];
 
   if (currentVersion < migrations.length) {
