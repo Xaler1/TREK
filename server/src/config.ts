@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+
 let JWT_SECRET: string = process.env.JWT_SECRET || '';
 
 if (!JWT_SECRET) {
