@@ -335,6 +335,13 @@ function runMigrations(db: Database.Database): void {
       try { db.exec('ALTER TABLE reservations ADD COLUMN price REAL'); } catch {}
       try { db.exec('ALTER TABLE reservations ADD COLUMN budget_item_id INTEGER REFERENCES budget_items(id) ON DELETE SET NULL'); } catch {}
     },
+    () => {
+      try { db.exec("ALTER TABLE categories ADD COLUMN color TEXT DEFAULT '#6366f1'"); } catch {}
+      try { db.exec("ALTER TABLE categories ADD COLUMN icon TEXT DEFAULT '📍'"); } catch {}
+      try { db.exec('ALTER TABLE places ADD COLUMN google_place_id TEXT'); } catch {}
+      try { db.exec('ALTER TABLE places ADD COLUMN website TEXT'); } catch {}
+      try { db.exec('ALTER TABLE places ADD COLUMN phone TEXT'); } catch {}
+    },
   ];
 
   if (currentVersion < migrations.length) {
