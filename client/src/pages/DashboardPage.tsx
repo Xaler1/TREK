@@ -14,7 +14,7 @@ import { useToast } from '../components/shared/Toast'
 import {
   Plus, Calendar, Trash2, Edit2, Map, ChevronDown, ChevronUp,
   Archive, ArchiveRestore, Clock, MapPin, Settings, X, ArrowRightLeft,
-  LayoutGrid, List,
+  LayoutGrid, List, Copy,
 } from 'lucide-react'
 
 interface DashboardTrip {
@@ -141,13 +141,14 @@ interface TripCardProps {
   onEdit: (trip: DashboardTrip) => void
   onDelete: (trip: DashboardTrip) => void
   onArchive: (id: number) => void
+  onDuplicate: (trip: DashboardTrip) => void
   onClick: (trip: DashboardTrip) => void
   t: (key: string, params?: Record<string, string | number | null>) => string
   locale: string
   dark?: boolean
 }
 
-function SpotlightCard({ trip, onEdit, onDelete, onArchive, onClick, t, locale, dark }: TripCardProps): React.ReactElement {
+function SpotlightCard({ trip, onEdit, onDelete, onArchive, onDuplicate, onClick, t, locale, dark }: TripCardProps): React.ReactElement {
   const status = getTripStatus(trip)
 
   const coverBg = trip.cover_image
@@ -189,6 +190,7 @@ function SpotlightCard({ trip, onEdit, onDelete, onArchive, onClick, t, locale, 
         <div style={{ position: 'absolute', top: 16, right: 16, display: 'flex', gap: 6 }}
           onClick={e => e.stopPropagation()}>
           <IconBtn onClick={() => onEdit(trip)} title={t('common.edit')}><Edit2 size={14} /></IconBtn>
+          {trip.is_owner && <IconBtn onClick={() => onDuplicate(trip)} title={t('dashboard.duplicate')}><Copy size={14} /></IconBtn>}
           <IconBtn onClick={() => onArchive(trip.id)} title={t('dashboard.archive')}><Archive size={14} /></IconBtn>
           <IconBtn onClick={() => onDelete(trip)} title={t('common.delete')} danger><Trash2 size={14} /></IconBtn>
         </div>
@@ -228,7 +230,7 @@ function SpotlightCard({ trip, onEdit, onDelete, onArchive, onClick, t, locale, 
 }
 
 // ── Regular Trip Card ────────────────────────────────────────────────────────
-function TripCard({ trip, onEdit, onDelete, onArchive, onClick, t, locale }: Omit<TripCardProps, 'dark'>): React.ReactElement {
+function TripCard({ trip, onEdit, onDelete, onArchive, onDuplicate, onClick, t, locale }: Omit<TripCardProps, 'dark'>): React.ReactElement {
   const status = getTripStatus(trip)
   const [hovered, setHovered] = useState(false)
 
@@ -308,6 +310,7 @@ function TripCard({ trip, onEdit, onDelete, onArchive, onClick, t, locale }: Omi
         <div style={{ display: 'flex', gap: 6, borderTop: '1px solid #f3f4f6', paddingTop: 10 }}
           onClick={e => e.stopPropagation()}>
           <CardAction onClick={() => onEdit(trip)} icon={<Edit2 size={12} />} label={t('common.edit')} />
+          {trip.is_owner && <CardAction onClick={() => onDuplicate(trip)} icon={<Copy size={12} />} label={t('dashboard.duplicate')} />}
           <CardAction onClick={() => onArchive(trip.id)} icon={<Archive size={12} />} label={t('dashboard.archive')} />
           <CardAction onClick={() => onDelete(trip)} icon={<Trash2 size={12} />} label={t('common.delete')} danger />
         </div>
@@ -317,7 +320,7 @@ function TripCard({ trip, onEdit, onDelete, onArchive, onClick, t, locale }: Omi
 }
 
 // ── List View Item ──────────────────────────────────────────────────────────
-function TripListItem({ trip, onEdit, onDelete, onArchive, onClick, t, locale }: Omit<TripCardProps, 'dark'>): React.ReactElement {
+function TripListItem({ trip, onEdit, onDelete, onArchive, onDuplicate, onClick, t, locale }: Omit<TripCardProps, 'dark'>): React.ReactElement {
   const status = getTripStatus(trip)
   const [hovered, setHovered] = useState(false)
 
@@ -405,6 +408,7 @@ function TripListItem({ trip, onEdit, onDelete, onArchive, onClick, t, locale }:
       {/* Actions */}
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
         <CardAction onClick={() => onEdit(trip)} icon={<Edit2 size={12} />} label="" />
+        {trip.is_owner && <CardAction onClick={() => onDuplicate(trip)} icon={<Copy size={12} />} label="" />}
         <CardAction onClick={() => onArchive(trip.id)} icon={<Archive size={12} />} label="" />
         <CardAction onClick={() => onDelete(trip)} icon={<Trash2 size={12} />} label="" danger />
       </div>
@@ -416,6 +420,7 @@ function TripListItem({ trip, onEdit, onDelete, onArchive, onClick, t, locale }:
 interface ArchivedRowProps {
   trip: DashboardTrip
   onEdit: (trip: DashboardTrip) => void
+  onDuplicate: (trip: DashboardTrip) => void
   onUnarchive: (id: number) => void
   onDelete: (trip: DashboardTrip) => void
   onClick: (trip: DashboardTrip) => void
@@ -423,7 +428,7 @@ interface ArchivedRowProps {
   locale: string
 }
 
-function ArchivedRow({ trip, onEdit, onUnarchive, onDelete, onClick, t, locale }: ArchivedRowProps): React.ReactElement {
+function ArchivedRow({ trip, onEdit, onDuplicate, onUnarchive, onDelete, onClick, t, locale }: ArchivedRowProps): React.ReactElement {
   return (
     <div onClick={() => onClick(trip)} style={{
       display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px',
@@ -450,6 +455,13 @@ function ArchivedRow({ trip, onEdit, onUnarchive, onDelete, onClick, t, locale }
         )}
       </div>
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+        {trip.is_owner && (
+          <button onClick={() => onDuplicate(trip)} title={t('dashboard.duplicate')} style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#6b7280' }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--text-faint)'; e.currentTarget.style.color = 'var(--text-primary)' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#e5e7eb'; e.currentTarget.style.color = '#6b7280' }}>
+            <Copy size={12} /> {t('dashboard.duplicate')}
+          </button>
+        )}
         <button onClick={() => onUnarchive(trip.id)} title={t('dashboard.restore')} style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#6b7280' }}
           onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--text-faint)'; e.currentTarget.style.color = 'var(--text-primary)' }}
           onMouseLeave={e => { e.currentTarget.style.borderColor = '#e5e7eb'; e.currentTarget.style.color = '#6b7280' }}>
@@ -615,6 +627,17 @@ export default function DashboardPage(): React.ReactElement {
       toast.success(t('dashboard.toast.archived'))
     } catch {
       toast.error(t('dashboard.toast.archiveError'))
+    }
+  }
+
+  const handleDuplicate = async (trip) => {
+    if (!confirm(t('dashboard.confirm.duplicate', { title: trip.title }))) return
+    try {
+      const data = await tripsApi.duplicate(trip.id)
+      setTrips(prev => sortTrips([data.trip, ...prev]))
+      toast.success(t('dashboard.toast.duplicated'))
+    } catch {
+      toast.error(t('dashboard.toast.duplicateError'))
     }
   }
 
@@ -785,6 +808,7 @@ export default function DashboardPage(): React.ReactElement {
               onEdit={tr => { setEditingTrip(tr); setShowForm(true) }}
               onDelete={handleDelete}
               onArchive={handleArchive}
+              onDuplicate={handleDuplicate}
               onClick={tr => navigate(`/trips/${tr.id}`)}
             />
           )}
@@ -801,6 +825,7 @@ export default function DashboardPage(): React.ReactElement {
                     onEdit={tr => { setEditingTrip(tr); setShowForm(true) }}
                     onDelete={handleDelete}
                     onArchive={handleArchive}
+                    onDuplicate={handleDuplicate}
                     onClick={tr => navigate(`/trips/${tr.id}`)}
                   />
                 ))}
@@ -815,6 +840,7 @@ export default function DashboardPage(): React.ReactElement {
                     onEdit={tr => { setEditingTrip(tr); setShowForm(true) }}
                     onDelete={handleDelete}
                     onArchive={handleArchive}
+                    onDuplicate={handleDuplicate}
                     onClick={tr => navigate(`/trips/${tr.id}`)}
                   />
                 ))}
@@ -843,6 +869,7 @@ export default function DashboardPage(): React.ReactElement {
                       trip={trip}
                       t={t} locale={locale}
                       onEdit={tr => { setEditingTrip(tr); setShowForm(true) }}
+                      onDuplicate={handleDuplicate}
                       onUnarchive={handleUnarchive}
                       onDelete={handleDelete}
                       onClick={tr => navigate(`/trips/${tr.id}`)}

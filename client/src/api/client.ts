@@ -66,6 +66,7 @@ export const authApi = {
 export const tripsApi = {
   list: (params?: Record<string, unknown>) => apiClient.get('/trips', { params }).then(r => r.data),
   create: (data: Record<string, unknown>) => apiClient.post('/trips', data).then(r => r.data),
+  duplicate: (id: number | string, data?: Record<string, unknown>) => apiClient.post(`/trips/${id}/duplicate`, data ?? {}).then(r => r.data),
   get: (id: number | string) => apiClient.get(`/trips/${id}`).then(r => r.data),
   update: (id: number | string, data: Record<string, unknown>) => apiClient.put(`/trips/${id}`, data).then(r => r.data),
   delete: (id: number | string) => apiClient.delete(`/trips/${id}`).then(r => r.data),

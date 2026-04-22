@@ -14,7 +14,10 @@ const MS_PER_DAY = 86400000;
 const MAX_TRIP_DAYS = 90;
 const MAX_COVER_SIZE = 20 * 1024 * 1024; // 20 MB
 
+const uploadsDir = path.join(__dirname, '../../uploads');
 const coversDir = path.join(__dirname, '../../uploads/covers');
+const filesDir = path.join(__dirname, '../../uploads/files');
+const legacyPhotosDir = path.join(__dirname, '../../uploads/photos');
 const coverStorage = multer.diskStorage({
   destination: (_req, _file, cb) => {
     if (!fs.existsSync(coversDir)) fs.mkdirSync(coversDir, { recursive: true });
@@ -49,6 +52,511 @@ const TRIP_SELECT = `
   FROM trips t
   JOIN users u ON u.id = t.user_id
 `;
+
+type SqlRow = Record<string, unknown>;
+
+const tableColumnsCache = new Map<string, string[]>();
+
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+function ensureDirectory(dirPath: string): void {
+  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function cleanupCreatedFiles(filePaths: string[]): void {
+  for (const filePath of filePaths) {
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {}
+  }
+}
+
+function resolveScopedUploadPath(uploadUrl: string, relativePrefix: string): string | null {
+  const normalized = uploadUrl.replace(/\\/g, '/');
+  const expectedPrefix = `/uploads/${relativePrefix}/`;
+  if (!normalized.startsWith(expectedPrefix)) return null;
+
+  const sourcePath = path.resolve(__dirname, '../../', normalized.replace(/^\//, ''));
+  const scopeRoot = path.resolve(path.join(uploadsDir, relativePrefix));
+  const scopePrefix = `${scopeRoot}${path.sep}`;
+  if (sourcePath !== scopeRoot && !sourcePath.startsWith(scopePrefix)) return null;
+  return sourcePath;
+}
+
+function normalizeCoverImageValue(coverImage: unknown): { valid: boolean; value: string | null } {
+  if (coverImage == null) return { valid: true, value: null };
+  if (typeof coverImage !== 'string') return { valid: false, value: null };
+
+  const trimmed = coverImage.trim();
+  if (!trimmed) return { valid: true, value: null };
+  if (/^https?:\/\//i.test(trimmed)) return { valid: true, value: trimmed };
+  if (resolveScopedUploadPath(trimmed, 'covers')) return { valid: true, value: trimmed.replace(/\\/g, '/') };
+  return { valid: false, value: null };
+}
+
+function tableExists(table: string): boolean {
+  return !!db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+}
+
+function getTableColumns(table: string): string[] {
+  if (!tableExists(table)) return [];
+  if (tableColumnsCache.has(table)) return tableColumnsCache.get(table)!;
+
+  const rows = db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as { name: string }[];
+  const columns = rows.map((row) => row.name);
+  tableColumnsCache.set(table, columns);
+  return columns;
+}
+
+function buildInsertRow(table: string, sourceRow: SqlRow, overrides: SqlRow = {}, exclude: string[] = []): SqlRow {
+  const row: SqlRow = {};
+  const excluded = new Set(['id', ...exclude]);
+
+  for (const column of getTableColumns(table)) {
+    if (excluded.has(column)) continue;
+
+    if (Object.prototype.hasOwnProperty.call(overrides, column)) {
+      const overrideValue = overrides[column];
+      if (overrideValue !== undefined) row[column] = overrideValue;
+      continue;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(sourceRow, column)) {
+      const value = sourceRow[column];
+      if (value !== undefined) row[column] = value;
+    }
+  }
+
+  return row;
+}
+
+function insertDynamic(table: string, row: SqlRow): number {
+  const columns = Object.keys(row);
+  if (columns.length === 0) {
+    const result = db.prepare(`INSERT INTO ${quoteIdentifier(table)} DEFAULT VALUES`).run();
+    return Number(result.lastInsertRowid);
+  }
+
+  const columnSql = columns.map((column) => quoteIdentifier(column)).join(', ');
+  const valueSql = columns.map((column) => `@${column}`).join(', ');
+  const result = db.prepare(`INSERT INTO ${quoteIdentifier(table)} (${columnSql}) VALUES (${valueSql})`).run(row);
+  return Number(result.lastInsertRowid);
+}
+
+function cloneUploadUrl(uploadUrl: string | null | undefined, storageDir: string, relativePrefix: string, createdFiles: string[]): string | null {
+  if (!uploadUrl) return null;
+
+  const normalized = uploadUrl.replace(/\\/g, '/');
+  const expectedPrefix = `/uploads/${relativePrefix}/`;
+  if (!normalized.startsWith(expectedPrefix)) return uploadUrl;
+
+  const sourcePath = resolveScopedUploadPath(normalized, relativePrefix);
+  if (!sourcePath || !fs.existsSync(sourcePath)) return null;
+
+  ensureDirectory(storageDir);
+  const ext = path.extname(normalized);
+  const fileName = `${uuidv4()}${ext}`;
+  const targetPath = path.join(storageDir, fileName);
+  fs.copyFileSync(sourcePath, targetPath);
+  createdFiles.push(targetPath);
+  return `${expectedPrefix}${fileName}`;
+}
+
+function cloneStoredAsset(storedValue: string | null | undefined, storageDir: string, storagePrefix: string, createdFiles: string[]): string | null {
+  if (!storedValue) return null;
+
+  const normalized = storedValue.replace(/\\/g, '/').replace(/^\/+/, '');
+  const prefixed = normalized.startsWith(`${storagePrefix}/`);
+  const sourcePath = prefixed ? path.join(uploadsDir, normalized) : path.join(storageDir, normalized);
+  if (!fs.existsSync(sourcePath)) return storedValue;
+
+  ensureDirectory(storageDir);
+  const ext = path.extname(normalized);
+  const fileName = `${uuidv4()}${ext}`;
+  const targetPath = path.join(storageDir, fileName);
+  fs.copyFileSync(sourcePath, targetPath);
+  createdFiles.push(targetPath);
+  return prefixed ? `${storagePrefix}/${fileName}` : fileName;
+}
+
+function buildDuplicateTripTitle(sourceTitle: string, userId: number): string {
+  const exists = db.prepare('SELECT 1 FROM trips WHERE user_id = ? AND title = ? LIMIT 1');
+  const baseTitle = `${sourceTitle} (Copy)`;
+  let candidate = baseTitle;
+  let copyNumber = 2;
+
+  while (exists.get(userId, candidate)) {
+    candidate = `${sourceTitle} (Copy ${copyNumber})`;
+    copyNumber += 1;
+  }
+
+  return candidate;
+}
+
+function duplicateTrip(sourceTripId: string | number, userId: number, requestedTitle?: string): SqlRow {
+  const sourceTrip = db.prepare('SELECT * FROM trips WHERE id = ? AND user_id = ?').get(sourceTripId, userId) as Trip | undefined;
+  if (!sourceTrip) throw new Error('Trip not found');
+
+  const createdFiles: string[] = [];
+  db.exec('BEGIN');
+
+  try {
+    const nextTitle = requestedTitle?.trim() ? requestedTitle.trim() : buildDuplicateTripTitle(sourceTrip.title, userId);
+    const sourceCover = normalizeCoverImageValue(sourceTrip.cover_image);
+    const coverImage = sourceCover.valid ? cloneUploadUrl(sourceCover.value ?? null, coversDir, 'covers', createdFiles) : null;
+    const tripInsert = db.prepare(`
+      INSERT INTO trips (user_id, title, description, start_date, end_date, currency, cover_image, is_archived)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    `).run(
+      userId,
+      nextTitle,
+      sourceTrip.description ?? null,
+      sourceTrip.start_date ?? null,
+      sourceTrip.end_date ?? null,
+      sourceTrip.currency,
+      coverImage
+    );
+
+    const newTripId = Number(tripInsert.lastInsertRowid);
+    const dayMap = new Map<number, number>();
+    const placeMap = new Map<number, number>();
+    const budgetItemMap = new Map<number, number>();
+    const bagMap = new Map<number, number>();
+    const assignmentMap = new Map<number, number>();
+    const accommodationMap = new Map<number, number>();
+    const collabNoteMap = new Map<number, number>();
+    const reservationMap = new Map<number, number>();
+    const pollMap = new Map<number, number>();
+    const messageMap = new Map<number, number>();
+    const fileMap = new Map<number, number>();
+
+    const tripMembers = db.prepare('SELECT * FROM trip_members WHERE trip_id = ? ORDER BY id').all(sourceTripId) as SqlRow[];
+    for (const member of tripMembers) {
+      insertDynamic('trip_members', buildInsertRow('trip_members', member, { trip_id: newTripId }));
+    }
+
+    const days = db.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number, id').all(sourceTripId) as SqlRow[];
+    for (const day of days) {
+      const oldId = Number(day.id);
+      const newId = insertDynamic('days', buildInsertRow('days', day, { trip_id: newTripId }));
+      dayMap.set(oldId, newId);
+    }
+
+    const places = db.prepare('SELECT * FROM places WHERE trip_id = ? ORDER BY id').all(sourceTripId) as SqlRow[];
+    for (const place of places) {
+      const oldId = Number(place.id);
+      const newId = insertDynamic('places', buildInsertRow('places', place, { trip_id: newTripId }));
+      placeMap.set(oldId, newId);
+    }
+
+    const placeTags = db.prepare(`
+      SELECT pt.*
+      FROM place_tags pt
+      JOIN places p ON p.id = pt.place_id
+      WHERE p.trip_id = ?
+      ORDER BY pt.place_id, pt.tag_id
+    `).all(sourceTripId) as SqlRow[];
+    for (const placeTag of placeTags) {
+      const newPlaceId = placeMap.get(Number(placeTag.place_id));
+      if (!newPlaceId) continue;
+      db.prepare('INSERT OR IGNORE INTO place_tags (place_id, tag_id) VALUES (?, ?)').run(newPlaceId, placeTag.tag_id);
+    }
+
+    const budgetItems = db.prepare('SELECT * FROM budget_items WHERE trip_id = ? ORDER BY sort_order, id').all(sourceTripId) as SqlRow[];
+    for (const item of budgetItems) {
+      const oldId = Number(item.id);
+      const newId = insertDynamic('budget_items', buildInsertRow('budget_items', item, { trip_id: newTripId }));
+      budgetItemMap.set(oldId, newId);
+    }
+
+    if (tableExists('budget_item_members')) {
+      const sourceBudgetMemberCounts = new Map<number, number>();
+      const copiedBudgetMemberCounts = new Map<number, number>();
+      const sourceBudgetMembers = db.prepare(`
+        SELECT bim.budget_item_id
+        FROM budget_item_members bim
+        JOIN budget_items bi ON bi.id = bim.budget_item_id
+        WHERE bi.trip_id = ?
+      `).all(sourceTripId) as Array<{ budget_item_id: number }>;
+      for (const member of sourceBudgetMembers) {
+        sourceBudgetMemberCounts.set(member.budget_item_id, (sourceBudgetMemberCounts.get(member.budget_item_id) ?? 0) + 1);
+      }
+
+      const budgetMembers = db.prepare(`
+        SELECT bim.*
+        FROM budget_item_members bim
+        JOIN budget_items bi ON bi.id = bim.budget_item_id
+        WHERE bi.trip_id = ?
+        ORDER BY bim.budget_item_id, bim.user_id
+      `).all(sourceTripId) as SqlRow[];
+      for (const member of budgetMembers) {
+        const sourceBudgetItemId = Number(member.budget_item_id);
+        const newBudgetItemId = budgetItemMap.get(sourceBudgetItemId);
+        if (!newBudgetItemId) continue;
+        copiedBudgetMemberCounts.set(sourceBudgetItemId, (copiedBudgetMemberCounts.get(sourceBudgetItemId) ?? 0) + 1);
+        insertDynamic('budget_item_members', buildInsertRow('budget_item_members', member, { budget_item_id: newBudgetItemId }));
+      }
+
+      for (const [sourceBudgetItemId, newBudgetItemId] of budgetItemMap.entries()) {
+        if (!sourceBudgetMemberCounts.has(sourceBudgetItemId)) continue;
+        const copiedCount = copiedBudgetMemberCounts.get(sourceBudgetItemId) ?? null;
+        db.prepare('UPDATE budget_items SET persons = ? WHERE id = ?').run(copiedCount, newBudgetItemId);
+      }
+    }
+
+    if (tableExists('packing_bags')) {
+      const bags = db.prepare('SELECT * FROM packing_bags WHERE trip_id = ? ORDER BY sort_order, id').all(sourceTripId) as SqlRow[];
+      for (const bag of bags) {
+        const oldId = Number(bag.id);
+        const newId = insertDynamic('packing_bags', buildInsertRow('packing_bags', bag, { trip_id: newTripId }));
+        bagMap.set(oldId, newId);
+      }
+    }
+
+    const packingItems = db.prepare('SELECT * FROM packing_items WHERE trip_id = ? ORDER BY sort_order, id').all(sourceTripId) as SqlRow[];
+    for (const item of packingItems) {
+      const bagId = item.bag_id == null ? null : bagMap.get(Number(item.bag_id)) ?? null;
+      const overrides: SqlRow = { trip_id: newTripId };
+      if (getTableColumns('packing_items').includes('bag_id')) overrides.bag_id = bagId;
+      insertDynamic('packing_items', buildInsertRow('packing_items', item, overrides));
+    }
+
+    if (tableExists('packing_category_assignees')) {
+      const assignees = db.prepare('SELECT * FROM packing_category_assignees WHERE trip_id = ? ORDER BY category_name, user_id').all(sourceTripId) as SqlRow[];
+      for (const assignee of assignees) {
+        insertDynamic('packing_category_assignees', buildInsertRow('packing_category_assignees', assignee, { trip_id: newTripId }));
+      }
+    }
+
+    const assignments = db.prepare(`
+      SELECT da.*
+      FROM day_assignments da
+      JOIN days d ON d.id = da.day_id
+      WHERE d.trip_id = ?
+      ORDER BY da.day_id, da.order_index, da.id
+    `).all(sourceTripId) as SqlRow[];
+    for (const assignment of assignments) {
+      const oldId = Number(assignment.id);
+      const newDayId = dayMap.get(Number(assignment.day_id));
+      const newPlaceId = placeMap.get(Number(assignment.place_id));
+      if (!newDayId || !newPlaceId) continue;
+
+      const budgetItemId = assignment.budget_item_id == null ? null : budgetItemMap.get(Number(assignment.budget_item_id)) ?? null;
+      const overrides: SqlRow = { day_id: newDayId, place_id: newPlaceId };
+      if (getTableColumns('day_assignments').includes('budget_item_id')) overrides.budget_item_id = budgetItemId;
+      const newId = insertDynamic('day_assignments', buildInsertRow('day_assignments', assignment, overrides));
+      assignmentMap.set(oldId, newId);
+    }
+
+    if (tableExists('assignment_participants')) {
+      const participants = db.prepare(`
+        SELECT ap.*
+        FROM assignment_participants ap
+        JOIN day_assignments da ON da.id = ap.assignment_id
+        JOIN days d ON d.id = da.day_id
+        WHERE d.trip_id = ?
+        ORDER BY ap.assignment_id, ap.user_id
+      `).all(sourceTripId) as SqlRow[];
+      for (const participant of participants) {
+        const newAssignmentId = assignmentMap.get(Number(participant.assignment_id));
+        if (!newAssignmentId) continue;
+        insertDynamic('assignment_participants', buildInsertRow('assignment_participants', participant, { assignment_id: newAssignmentId }));
+      }
+    }
+
+    if (tableExists('day_accommodations')) {
+      const accommodations = db.prepare('SELECT * FROM day_accommodations WHERE trip_id = ? ORDER BY id').all(sourceTripId) as SqlRow[];
+      for (const accommodation of accommodations) {
+        const oldId = Number(accommodation.id);
+        const newPlaceId = placeMap.get(Number(accommodation.place_id));
+        const newStartDayId = dayMap.get(Number(accommodation.start_day_id));
+        const newEndDayId = dayMap.get(Number(accommodation.end_day_id));
+        if (!newPlaceId || !newStartDayId || !newEndDayId) continue;
+
+        const budgetItemId = accommodation.budget_item_id == null ? null : budgetItemMap.get(Number(accommodation.budget_item_id)) ?? null;
+        const overrides: SqlRow = {
+          trip_id: newTripId,
+          place_id: newPlaceId,
+          start_day_id: newStartDayId,
+          end_day_id: newEndDayId,
+        };
+        if (getTableColumns('day_accommodations').includes('budget_item_id')) overrides.budget_item_id = budgetItemId;
+        const newId = insertDynamic('day_accommodations', buildInsertRow('day_accommodations', accommodation, overrides));
+        accommodationMap.set(oldId, newId);
+      }
+    }
+
+    const dayNotes = db.prepare('SELECT * FROM day_notes WHERE trip_id = ? ORDER BY day_id, sort_order, id').all(sourceTripId) as SqlRow[];
+    for (const note of dayNotes) {
+      const newDayId = dayMap.get(Number(note.day_id));
+      if (!newDayId) continue;
+      insertDynamic('day_notes', buildInsertRow('day_notes', note, { trip_id: newTripId, day_id: newDayId }));
+    }
+
+    const reservations = db.prepare('SELECT * FROM reservations WHERE trip_id = ? ORDER BY id').all(sourceTripId) as SqlRow[];
+    for (const reservation of reservations) {
+      const oldId = Number(reservation.id);
+      const overrides: SqlRow = { trip_id: newTripId };
+      if (reservation.day_id != null) overrides.day_id = dayMap.get(Number(reservation.day_id)) ?? null;
+      if (reservation.place_id != null) overrides.place_id = placeMap.get(Number(reservation.place_id)) ?? null;
+      if (reservation.assignment_id != null) overrides.assignment_id = assignmentMap.get(Number(reservation.assignment_id)) ?? null;
+      if (getTableColumns('reservations').includes('accommodation_id')) {
+        overrides.accommodation_id = reservation.accommodation_id == null ? null : accommodationMap.get(Number(reservation.accommodation_id)) ?? null;
+      }
+      if (getTableColumns('reservations').includes('budget_item_id')) {
+        overrides.budget_item_id = reservation.budget_item_id == null ? null : budgetItemMap.get(Number(reservation.budget_item_id)) ?? null;
+      }
+      const newId = insertDynamic('reservations', buildInsertRow('reservations', reservation, overrides));
+      reservationMap.set(oldId, newId);
+    }
+
+    if (tableExists('collab_notes')) {
+      const collabNotes = db.prepare('SELECT * FROM collab_notes WHERE trip_id = ? ORDER BY pinned DESC, updated_at DESC, id DESC').all(sourceTripId) as SqlRow[];
+      for (const note of collabNotes) {
+        const oldId = Number(note.id);
+        const newId = insertDynamic('collab_notes', buildInsertRow('collab_notes', note, { trip_id: newTripId }));
+        collabNoteMap.set(oldId, newId);
+      }
+    }
+
+    if (tableExists('collab_polls')) {
+      const polls = db.prepare('SELECT * FROM collab_polls WHERE trip_id = ? ORDER BY created_at DESC, id DESC').all(sourceTripId) as SqlRow[];
+      for (const poll of polls) {
+        const oldId = Number(poll.id);
+        const newId = insertDynamic('collab_polls', buildInsertRow('collab_polls', poll, { trip_id: newTripId }));
+        pollMap.set(oldId, newId);
+      }
+
+      if (tableExists('collab_poll_votes')) {
+        const pollVotes = db.prepare(`
+          SELECT cpv.*
+          FROM collab_poll_votes cpv
+          JOIN collab_polls cp ON cp.id = cpv.poll_id
+          WHERE cp.trip_id = ?
+          ORDER BY cpv.poll_id, cpv.user_id, cpv.option_index
+        `).all(sourceTripId) as SqlRow[];
+        for (const vote of pollVotes) {
+          const newPollId = pollMap.get(Number(vote.poll_id));
+          if (!newPollId) continue;
+          insertDynamic('collab_poll_votes', buildInsertRow('collab_poll_votes', vote, { poll_id: newPollId }));
+        }
+      }
+    }
+
+    if (tableExists('collab_messages')) {
+      const repliesToRestore: Array<{ messageId: number; replyTo: number }> = [];
+      const messages = db.prepare('SELECT * FROM collab_messages WHERE trip_id = ? ORDER BY created_at ASC, id ASC').all(sourceTripId) as SqlRow[];
+      for (const message of messages) {
+        const oldId = Number(message.id);
+        const replyTo = message.reply_to == null ? null : Number(message.reply_to);
+        const newId = insertDynamic('collab_messages', buildInsertRow('collab_messages', message, { trip_id: newTripId, reply_to: null }));
+        messageMap.set(oldId, newId);
+        if (replyTo) repliesToRestore.push({ messageId: newId, replyTo });
+      }
+
+      for (const reply of repliesToRestore) {
+        const newReplyToId = messageMap.get(reply.replyTo);
+        if (!newReplyToId) continue;
+        db.prepare('UPDATE collab_messages SET reply_to = ? WHERE id = ?').run(newReplyToId, reply.messageId);
+      }
+
+      if (tableExists('collab_message_reactions')) {
+        const reactions = db.prepare(`
+          SELECT cmr.*
+          FROM collab_message_reactions cmr
+          JOIN collab_messages cm ON cm.id = cmr.message_id
+          WHERE cm.trip_id = ?
+          ORDER BY cmr.message_id, cmr.user_id, cmr.emoji
+        `).all(sourceTripId) as SqlRow[];
+        for (const reaction of reactions) {
+          const newMessageId = messageMap.get(Number(reaction.message_id));
+          if (!newMessageId) continue;
+          insertDynamic('collab_message_reactions', buildInsertRow('collab_message_reactions', reaction, { message_id: newMessageId }));
+        }
+      }
+    }
+
+    const tripFileColumns = getTableColumns('trip_files');
+    const tripFilesWhere = tripFileColumns.includes('deleted_at') ? 'trip_id = ? AND deleted_at IS NULL' : 'trip_id = ?';
+    const tripFiles = db.prepare(`SELECT * FROM trip_files WHERE ${tripFilesWhere} ORDER BY id`).all(sourceTripId) as SqlRow[];
+    for (const file of tripFiles) {
+      if (tripFileColumns.includes('note_id') && file.note_id != null && !collabNoteMap.has(Number(file.note_id))) continue;
+
+      const oldId = Number(file.id);
+      const overrides: SqlRow = {
+        trip_id: newTripId,
+        filename: cloneStoredAsset(String(file.filename), filesDir, 'files', createdFiles) ?? file.filename,
+        deleted_at: null,
+      };
+      if (file.place_id != null) overrides.place_id = placeMap.get(Number(file.place_id)) ?? null;
+      if (file.reservation_id != null) overrides.reservation_id = reservationMap.get(Number(file.reservation_id)) ?? null;
+      if (tripFileColumns.includes('note_id')) {
+        overrides.note_id = file.note_id == null ? null : collabNoteMap.get(Number(file.note_id)) ?? null;
+      }
+      const newId = insertDynamic('trip_files', buildInsertRow('trip_files', file, overrides));
+      fileMap.set(oldId, newId);
+    }
+
+    if (tableExists('file_links')) {
+      const fileLinks = db.prepare(`
+        SELECT fl.*
+        FROM file_links fl
+        JOIN trip_files tf ON tf.id = fl.file_id
+        WHERE tf.trip_id = ?
+        ORDER BY fl.id
+      `).all(sourceTripId) as SqlRow[];
+      for (const link of fileLinks) {
+        const newFileId = fileMap.get(Number(link.file_id));
+        if (!newFileId) continue;
+        const overrides: SqlRow = { file_id: newFileId };
+        if (link.reservation_id != null) overrides.reservation_id = reservationMap.get(Number(link.reservation_id)) ?? null;
+        if (link.assignment_id != null) overrides.assignment_id = assignmentMap.get(Number(link.assignment_id)) ?? null;
+        if (link.place_id != null) overrides.place_id = placeMap.get(Number(link.place_id)) ?? null;
+        insertDynamic('file_links', buildInsertRow('file_links', link, overrides));
+      }
+    }
+
+    if (tableExists('trip_photos')) {
+      const tripPhotos = db.prepare(`
+        SELECT tp.*
+        FROM trip_photos tp
+        LEFT JOIN trip_members tm ON tm.trip_id = tp.trip_id AND tm.user_id = tp.user_id
+        WHERE tp.trip_id = ?
+          AND (tp.user_id = ? OR tp.shared = 1)
+          AND (tp.user_id = ? OR tm.user_id IS NOT NULL)
+        ORDER BY tp.id
+      `).all(sourceTripId, sourceTrip.user_id, sourceTrip.user_id) as SqlRow[];
+      for (const tripPhoto of tripPhotos) {
+        insertDynamic('trip_photos', buildInsertRow('trip_photos', tripPhoto, { trip_id: newTripId }));
+      }
+    }
+
+    if (tableExists('photos')) {
+      const legacyPhotos = db.prepare('SELECT * FROM photos WHERE trip_id = ? ORDER BY id').all(sourceTripId) as SqlRow[];
+      for (const photo of legacyPhotos) {
+        const overrides: SqlRow = {
+          trip_id: newTripId,
+          filename: cloneStoredAsset(String(photo.filename), legacyPhotosDir, 'photos', createdFiles) ?? photo.filename,
+        };
+        if (photo.day_id != null) overrides.day_id = dayMap.get(Number(photo.day_id)) ?? null;
+        if (photo.place_id != null) overrides.place_id = placeMap.get(Number(photo.place_id)) ?? null;
+        insertDynamic('photos', buildInsertRow('photos', photo, overrides));
+      }
+    }
+
+    db.exec('COMMIT');
+
+    const duplicatedTrip = db.prepare(`${TRIP_SELECT} WHERE t.id = :tripId`).get({ userId, tripId: newTripId }) as SqlRow | undefined;
+    if (!duplicatedTrip) throw new Error('Failed to load duplicated trip');
+    return duplicatedTrip;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    cleanupCreatedFiles(createdFiles);
+    throw error;
+  }
+}
 
 function generateDays(tripId: number | bigint | string, startDate: string | null, endDate: string | null) {
   const existing = db.prepare('SELECT id, day_number, date FROM days WHERE trip_id = ?').all(tripId) as { id: number; day_number: number; date: string | null }[];
@@ -151,6 +659,23 @@ router.post('/', authenticate, (req: Request, res: Response) => {
   res.status(201).json({ trip });
 });
 
+router.post('/:id/duplicate', authenticate, (req: Request, res: Response) => {
+  const authReq = req as AuthRequest;
+  const access = canAccessTrip(req.params.id, authReq.user.id);
+  if (!access) return res.status(404).json({ error: 'Trip not found' });
+  if (!isOwner(req.params.id, authReq.user.id))
+    return res.status(403).json({ error: 'Only the owner can duplicate the trip' });
+
+  try {
+    const title = typeof req.body?.title === 'string' ? req.body.title : undefined;
+    const trip = duplicateTrip(req.params.id, authReq.user.id, title);
+    res.status(201).json({ trip });
+  } catch (error) {
+    console.error('Failed to duplicate trip:', error);
+    res.status(500).json({ error: 'Failed to duplicate trip' });
+  }
+});
+
 router.get('/:id', authenticate, (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
   const userId = authReq.user.id;
@@ -185,7 +710,12 @@ router.put('/:id', authenticate, (req: Request, res: Response) => {
   const newEnd = end_date !== undefined ? end_date : trip.end_date;
   const newCurrency = currency || trip.currency;
   const newArchived = is_archived !== undefined ? (is_archived ? 1 : 0) : trip.is_archived;
-  const newCover = cover_image !== undefined ? cover_image : trip.cover_image;
+  let newCover = trip.cover_image;
+  if (cover_image !== undefined) {
+    const normalizedCover = normalizeCoverImageValue(cover_image);
+    if (!normalizedCover.valid) return res.status(400).json({ error: 'Invalid cover image reference' });
+    newCover = normalizedCover.value;
+  }
 
   db.prepare(`
     UPDATE trips SET title=?, description=?, start_date=?, end_date=?,

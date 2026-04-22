@@ -1,10 +1,32 @@
 import express, { Request, Response } from 'express';
-import { db } from '../db/database';
+import { db, canAccessTrip } from '../db/database';
 import { authenticate } from '../middleware/auth';
 import { broadcast } from '../websocket';
 import { AuthRequest } from '../types';
 
 const router = express.Router();
+
+function verifyTripAccess(tripId: string | number, userId: number) {
+  return canAccessTrip(tripId, userId);
+}
+
+function resolveAuthorizedImmichUser(assetId: string, requesterId: number, requestedUserId?: number) {
+  const targetUserId = requestedUserId && Number.isFinite(requestedUserId) ? requestedUserId : requesterId;
+  return db.prepare(`
+    SELECT DISTINCT u.id, u.immich_url, u.immich_api_key
+    FROM trip_photos tp
+    JOIN users u ON u.id = tp.user_id
+    JOIN trips t ON t.id = tp.trip_id
+    LEFT JOIN trip_members viewer_member ON viewer_member.trip_id = tp.trip_id AND viewer_member.user_id = ?
+    LEFT JOIN trip_members photo_owner_member ON photo_owner_member.trip_id = tp.trip_id AND photo_owner_member.user_id = tp.user_id
+    WHERE tp.immich_asset_id = ?
+      AND tp.user_id = ?
+      AND (t.user_id = ? OR viewer_member.user_id IS NOT NULL)
+      AND (tp.user_id = ? OR tp.shared = 1)
+      AND (tp.user_id = t.user_id OR photo_owner_member.user_id IS NOT NULL)
+    LIMIT 1
+  `).get(requesterId, assetId, targetUserId, requesterId, requesterId) as { id: number; immich_url: string | null; immich_api_key: string | null } | undefined;
+}
 
 // ── Immich Connection Settings ──────────────────────────────────────────────
 
@@ -108,13 +130,17 @@ router.post('/search', authenticate, async (req: Request, res: Response) => {
 router.get('/trips/:tripId/photos', authenticate, (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
   const { tripId } = req.params;
+  if (!verifyTripAccess(tripId, authReq.user.id)) return res.status(404).json({ error: 'Trip not found' });
 
   const photos = db.prepare(`
     SELECT tp.immich_asset_id, tp.user_id, tp.shared, tp.added_at,
            u.username, u.avatar, u.immich_url
     FROM trip_photos tp
     JOIN users u ON tp.user_id = u.id
+    JOIN trips t ON t.id = tp.trip_id
+    LEFT JOIN trip_members tm ON tm.trip_id = tp.trip_id AND tm.user_id = tp.user_id
     WHERE tp.trip_id = ?
+    AND (tp.user_id = t.user_id OR tm.user_id IS NOT NULL)
     AND (tp.user_id = ? OR tp.shared = 1)
     ORDER BY tp.added_at ASC
   `).all(tripId, authReq.user.id);
@@ -127,6 +153,8 @@ router.post('/trips/:tripId/photos', authenticate, (req: Request, res: Response)
   const authReq = req as AuthRequest;
   const { tripId } = req.params;
   const { asset_ids, shared = true } = req.body;
+
+  if (!verifyTripAccess(tripId, authReq.user.id)) return res.status(404).json({ error: 'Trip not found' });
 
   if (!Array.isArray(asset_ids) || asset_ids.length === 0) {
     return res.status(400).json({ error: 'asset_ids required' });
@@ -148,6 +176,7 @@ router.post('/trips/:tripId/photos', authenticate, (req: Request, res: Response)
 // Remove a photo from a trip (own photos only)
 router.delete('/trips/:tripId/photos/:assetId', authenticate, (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
+  if (!verifyTripAccess(req.params.tripId, authReq.user.id)) return res.status(404).json({ error: 'Trip not found' });
   db.prepare('DELETE FROM trip_photos WHERE trip_id = ? AND user_id = ? AND immich_asset_id = ?')
     .run(req.params.tripId, authReq.user.id, req.params.assetId);
   res.json({ success: true });
@@ -158,6 +187,7 @@ router.delete('/trips/:tripId/photos/:assetId', authenticate, (req: Request, res
 router.put('/trips/:tripId/photos/:assetId/sharing', authenticate, (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
   const { shared } = req.body;
+  if (!verifyTripAccess(req.params.tripId, authReq.user.id)) return res.status(404).json({ error: 'Trip not found' });
   db.prepare('UPDATE trip_photos SET shared = ? WHERE trip_id = ? AND user_id = ? AND immich_asset_id = ?')
     .run(shared ? 1 : 0, req.params.tripId, authReq.user.id, req.params.assetId);
   res.json({ success: true });
@@ -169,10 +199,8 @@ router.put('/trips/:tripId/photos/:assetId/sharing', authenticate, (req: Request
 router.get('/assets/:assetId/info', authenticate, async (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
   const { assetId } = req.params;
-  const { userId } = req.query;
-
-  const targetUserId = userId ? Number(userId) : authReq.user.id;
-  const user = db.prepare('SELECT immich_url, immich_api_key FROM users WHERE id = ?').get(targetUserId) as any;
+  const requestedUserId = req.query.userId ? Number(req.query.userId) : undefined;
+  const user = resolveAuthorizedImmichUser(assetId, authReq.user.id, requestedUserId);
   if (!user?.immich_url || !user?.immich_api_key) return res.status(404).json({ error: 'Not found' });
 
   try {
@@ -220,10 +248,8 @@ function authFromQuery(req: Request, res: Response, next: Function) {
 router.get('/assets/:assetId/thumbnail', authFromQuery, async (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
   const { assetId } = req.params;
-  const { userId } = req.query;
-
-  const targetUserId = userId ? Number(userId) : authReq.user.id;
-  const user = db.prepare('SELECT immich_url, immich_api_key FROM users WHERE id = ?').get(targetUserId) as any;
+  const requestedUserId = req.query.userId ? Number(req.query.userId) : undefined;
+  const user = resolveAuthorizedImmichUser(assetId, authReq.user.id, requestedUserId);
   if (!user?.immich_url || !user?.immich_api_key) return res.status(404).send('Not found');
 
   try {
@@ -244,10 +270,8 @@ router.get('/assets/:assetId/thumbnail', authFromQuery, async (req: Request, res
 router.get('/assets/:assetId/original', authFromQuery, async (req: Request, res: Response) => {
   const authReq = req as AuthRequest;
   const { assetId } = req.params;
-  const { userId } = req.query;
-
-  const targetUserId = userId ? Number(userId) : authReq.user.id;
-  const user = db.prepare('SELECT immich_url, immich_api_key FROM users WHERE id = ?').get(targetUserId) as any;
+  const requestedUserId = req.query.userId ? Number(req.query.userId) : undefined;
+  const user = resolveAuthorizedImmichUser(assetId, authReq.user.id, requestedUserId);
   if (!user?.immich_url || !user?.immich_api_key) return res.status(404).send('Not found');
 
   try {
