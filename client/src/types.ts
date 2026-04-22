@@ -28,6 +28,7 @@ export interface Trip {
 export interface Day {
   id: number
   trip_id: number
+  day_number: number
   date: string
   title: string | null
   notes: string | null
@@ -254,13 +255,20 @@ export interface UserWithOidc extends User {
 export interface Accommodation {
   id: number
   trip_id: number
+  place_id: number
+  start_day_id: number
+  end_day_id: number
   name: string
   address: string | null
   check_in: string | null
   check_out: string | null
+  confirmation?: string | null
   confirmation_number: string | null
   notes: string | null
+  place_name?: string | null
   url: string | null
+  price?: number | null
+  budget_item_id?: number | null
   created_at: string
 }
 

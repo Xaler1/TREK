@@ -613,6 +613,8 @@ const en: Record<string, string | { name: string; category: string }[]> = {
   'trip.shiftDates.days': 'Days to shift',
   'trip.shiftDates.apply': 'Shift Dates',
   'trip.toast.datesShifted': 'Trip dates shifted successfully',
+  'trip.toast.dayInserted': 'Day inserted',
+  'trip.toast.dayDeleted': 'Day deleted',
 
   // Day Plan Sidebar
   'dayplan.emptyDay': 'No places planned for this day',
@@ -1115,6 +1117,9 @@ const en: Record<string, string | { name: string; category: string }[]> = {
   'planner.keepPosition': 'Keep position during route optimization',
   'planner.dayDetails': 'Day details',
   'planner.dayN': 'Day {n}',
+  'planner.insertDayAfter': 'Insert day after',
+  'planner.deleteDay': 'Delete day',
+  'planner.confirmDeleteDay': 'Delete this day and shift all following days up?',
 
   // Dashboard Stats
   'stats.countries': 'Countries',

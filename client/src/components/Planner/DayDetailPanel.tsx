@@ -67,6 +67,16 @@ export default function DayDetailPanel({ day, days, places, categories = [], tri
   const [hotelDayRange, setHotelDayRange] = useState({ start: day?.id, end: day?.id })
   const [hotelCategoryFilter, setHotelCategoryFilter] = useState('')
   const [hotelForm, setHotelForm] = useState({ check_in: '', check_out: '', confirmation: '', place_id: null })
+  const dayNumberById = new Map(days.map(d => [d.id, d.day_number]))
+
+  const accommodationIncludesDay = (accommodation, dayId) => {
+    const currentDayNumber = dayNumberById.get(dayId)
+    const startDayNumber = dayNumberById.get(accommodation.start_day_id)
+    const endDayNumber = dayNumberById.get(accommodation.end_day_id)
+
+    if (currentDayNumber == null || startDayNumber == null || endDayNumber == null) return false
+    return currentDayNumber >= startDayNumber && currentDayNumber <= endDayNumber
+  }
 
   useEffect(() => {
     if (!day?.date || !lat || !lng) { setWeather(null); return }
@@ -82,9 +92,7 @@ export default function DayDetailPanel({ day, days, places, categories = [], tri
     accommodationsApi.list(tripId)
       .then(data => {
         setAccommodations(data.accommodations || [])
-        const allForDay = (data.accommodations || []).filter(a =>
-          days.some(d => d.id >= a.start_day_id && d.id <= a.end_day_id && d.id === day?.id)
-        )
+        const allForDay = (data.accommodations || []).filter(a => accommodationIncludesDay(a, day?.id))
         setDayAccommodations(allForDay)
         setAccommodation(allForDay[0] || null)
       })
@@ -379,7 +387,7 @@ export default function DayDetailPanel({ day, days, places, categories = [], tri
                                 const data = await accommodationsApi.list(tripId)
                                 setAccommodations(data.accommodations || [])
                                 const allForDay = (data.accommodations || []).filter((a: any) =>
-                                  days.some((d: any) => d.id >= a.start_day_id && d.id <= a.end_day_id && d.id === day?.id)
+                                  accommodationIncludesDay(a, day?.id)
                                 )
                                 setDayAccommodations(allForDay)
                                 setAccommodation(allForDay[0] || null)
@@ -576,7 +584,7 @@ export default function DayDetailPanel({ day, days, places, categories = [], tri
                       // Reload
                       accommodationsApi.list(tripId).then(d => {
                         setAccommodations(d.accommodations || [])
-                        const acc = (d.accommodations || []).find(a => days.some(dd => dd.id >= a.start_day_id && dd.id <= a.end_day_id && dd.id === day?.id))
+                        const acc = (d.accommodations || []).find(a => accommodationIncludesDay(a, day?.id))
                         setAccommodation(acc || null)
                       })
                       onAccommodationChange?.()

@@ -8,6 +8,153 @@ import { AuthRequest, AssignmentRow, Day, DayNote } from '../types';
 
 const router = express.Router({ mergeParams: true });
 
+interface TripDayRow extends Day {
+  date: string | null;
+  title: string | null;
+  notes: string | null;
+}
+
+interface TripDateRangeRow {
+  start_date: string | null;
+  end_date: string | null;
+}
+
+interface AccommodationLinkRow {
+  id: number;
+  start_day_id: number;
+  end_day_id: number;
+  place_name: string;
+  price: number | null;
+  budget_item_id: number | null;
+}
+
+interface ReservationLinkRow {
+  id: number;
+  reservation_time: string | null;
+  reservation_end_time: string | null;
+}
+
+function shiftIsoDate(value: string, deltaDays: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + deltaDays);
+  return date.toISOString().split('T')[0];
+}
+
+function shiftReservationDateValue(value: string | null, deltaDays: number): string | null {
+  if (!value || deltaDays === 0) return value;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return shiftIsoDate(value, deltaDays);
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    return `${shiftIsoDate(value.slice(0, 10), deltaDays)}${value.slice(10)}`;
+  }
+  return value;
+}
+
+function replaceReservationDateValue(value: string | null, newDate: string | null): string | null {
+  if (!newDate) return value;
+  if (!value) return newDate;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return newDate;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return `${newDate}${value.slice(10)}`;
+  return value;
+}
+
+function loadTripDays(tripId: number | string) {
+  return db.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number ASC').all(tripId) as TripDayRow[];
+}
+
+function updateReservationsForShiftedDays(dayDeltas: Map<number, number>): void {
+  if (dayDeltas.size === 0) return;
+
+  const reservations = db.prepare(
+    `SELECT id, day_id, reservation_time, reservation_end_time
+     FROM reservations
+     WHERE day_id IS NOT NULL`
+  ).all() as Array<{ id: number; day_id: number; reservation_time: string | null; reservation_end_time: string | null }>;
+
+  const updateReservation = db.prepare(
+    'UPDATE reservations SET reservation_time = ?, reservation_end_time = ? WHERE id = ?'
+  );
+
+  for (const reservation of reservations) {
+    const delta = dayDeltas.get(reservation.day_id);
+    if (!delta) continue;
+
+    const nextReservationTime = shiftReservationDateValue(reservation.reservation_time, delta);
+    const nextReservationEndTime = shiftReservationDateValue(reservation.reservation_end_time, delta);
+
+    if (
+      nextReservationTime !== reservation.reservation_time
+      || nextReservationEndTime !== reservation.reservation_end_time
+    ) {
+      updateReservation.run(nextReservationTime, nextReservationEndTime, reservation.id);
+    }
+  }
+}
+
+function syncAccommodationReferences(tripId: number | string): void {
+  const daysById = new Map(loadTripDays(tripId).map(day => [day.id, day]));
+  const accommodations = db.prepare(`
+    SELECT a.id, a.start_day_id, a.end_day_id, a.price, a.budget_item_id, p.name as place_name
+    FROM day_accommodations a
+    JOIN places p ON p.id = a.place_id
+    WHERE a.trip_id = ?
+  `).all(tripId) as AccommodationLinkRow[];
+
+  const updateBudgetWithPrice = db.prepare(
+    'UPDATE budget_items SET total_price = ?, days = ?, name = ? WHERE id = ?'
+  );
+  const updateBudgetWithoutPrice = db.prepare(
+    'UPDATE budget_items SET days = ?, name = ? WHERE id = ?'
+  );
+  const updateReservation = db.prepare(
+    'UPDATE reservations SET day_id = ?, reservation_time = ? WHERE id = ?'
+  );
+
+  for (const accommodation of accommodations) {
+    const startDay = daysById.get(accommodation.start_day_id);
+    const endDay = daysById.get(accommodation.end_day_id);
+    if (!startDay || !endDay) continue;
+
+    const nights = Math.max(1, endDay.day_number - startDay.day_number);
+
+    if (accommodation.budget_item_id) {
+      if (accommodation.price) {
+        updateBudgetWithPrice.run(accommodation.price * nights, nights, accommodation.place_name, accommodation.budget_item_id);
+      } else {
+        updateBudgetWithoutPrice.run(nights, accommodation.place_name, accommodation.budget_item_id);
+      }
+    }
+
+    const linkedReservations = db.prepare(
+      'SELECT id, reservation_time, reservation_end_time FROM reservations WHERE accommodation_id = ?'
+    ).all(accommodation.id) as ReservationLinkRow[];
+
+    for (const reservation of linkedReservations) {
+      const nextReservationTime = replaceReservationDateValue(reservation.reservation_time, startDay.date);
+      updateReservation.run(accommodation.start_day_id, nextReservationTime, reservation.id);
+    }
+  }
+}
+
+function deleteAccommodationCascade(accommodationId: number): void {
+  const accommodation = db.prepare(
+    'SELECT budget_item_id FROM day_accommodations WHERE id = ?'
+  ).get(accommodationId) as { budget_item_id: number | null } | undefined;
+  if (!accommodation) return;
+
+  if (accommodation.budget_item_id) {
+    db.prepare('DELETE FROM budget_items WHERE id = ?').run(accommodation.budget_item_id);
+  }
+
+  const linkedReservation = db.prepare(
+    'SELECT id FROM reservations WHERE accommodation_id = ?'
+  ).get(accommodationId) as { id: number } | undefined;
+  if (linkedReservation) {
+    db.prepare('DELETE FROM reservations WHERE id = ?').run(linkedReservation.id);
+  }
+
+  db.prepare('DELETE FROM day_accommodations WHERE id = ?').run(accommodationId);
+}
+
 function getAssignmentsForDay(dayId: number | string) {
   const assignments = db.prepare(`
     SELECT da.*, p.id as place_id, p.name as place_name, p.description as place_description,
@@ -128,20 +275,88 @@ router.get('/', authenticate, requireTripAccess, (req: Request, res: Response) =
 
 router.post('/', authenticate, requireTripAccess, (req: Request, res: Response) => {
   const { tripId } = req.params;
-  const { date, notes } = req.body;
+  const { date, notes, title, after_day_id } = req.body;
 
-  const maxDay = db.prepare('SELECT MAX(day_number) as max FROM days WHERE trip_id = ?').get(tripId) as { max: number | null };
-  const dayNumber = (maxDay.max || 0) + 1;
+  const trip = db.prepare('SELECT start_date, end_date FROM trips WHERE id = ?').get(tripId) as TripDateRangeRow | undefined;
+  if (!trip) {
+    return res.status(404).json({ error: 'Trip not found' });
+  }
 
-  const result = db.prepare(
-    'INSERT INTO days (trip_id, day_number, date, notes) VALUES (?, ?, ?, ?)'
-  ).run(tripId, dayNumber, date || null, notes || null);
+  db.exec('BEGIN');
+  try {
+    let dayNumber: number;
+    let nextDate: string | null = date || null;
+    const shiftedDays = new Map<number, number>();
 
-  const day = db.prepare('SELECT * FROM days WHERE id = ?').get(result.lastInsertRowid) as Day;
+    if (after_day_id !== undefined && after_day_id !== null) {
+      const anchorDay = db.prepare('SELECT * FROM days WHERE id = ? AND trip_id = ?').get(after_day_id, tripId) as TripDayRow | undefined;
+      if (!anchorDay) {
+        db.exec('ROLLBACK');
+        return res.status(404).json({ error: 'Day not found' });
+      }
 
-  const dayResult = { ...day, assignments: [] };
-  res.status(201).json({ day: dayResult });
-  broadcast(tripId, 'day:created', { day: dayResult }, req.headers['x-socket-id'] as string);
+      dayNumber = anchorDay.day_number + 1;
+      if (date === undefined) {
+        nextDate = anchorDay.date ? shiftIsoDate(anchorDay.date, 1) : null;
+      }
+
+      const laterDays = db.prepare(
+        'SELECT id, day_number, date FROM days WHERE trip_id = ? AND day_number > ? ORDER BY day_number ASC'
+      ).all(tripId, anchorDay.day_number) as Array<{ id: number; day_number: number; date: string | null }>;
+
+      const setTempDayNumber = db.prepare('UPDATE days SET day_number = ? WHERE id = ?');
+      const updateShiftedDay = db.prepare('UPDATE days SET day_number = ?, date = ? WHERE id = ?');
+
+      laterDays.forEach((entry, index) => setTempDayNumber.run(-(index + 1), entry.id));
+      for (const entry of laterDays) {
+        updateShiftedDay.run(
+          entry.day_number + 1,
+          entry.date ? shiftIsoDate(entry.date, 1) : null,
+          entry.id,
+        );
+        shiftedDays.set(entry.id, 1);
+      }
+
+      if (trip.end_date) {
+        db.prepare('UPDATE trips SET end_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(shiftIsoDate(trip.end_date, 1), tripId);
+      }
+    } else {
+      const maxDay = db.prepare('SELECT MAX(day_number) as max FROM days WHERE trip_id = ?').get(tripId) as { max: number | null };
+      dayNumber = (maxDay.max || 0) + 1;
+      if (date === undefined && trip.end_date) {
+        nextDate = shiftIsoDate(trip.end_date, 1);
+        db.prepare('UPDATE trips SET end_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(nextDate, tripId);
+      }
+    }
+
+    const result = db.prepare(
+      'INSERT INTO days (trip_id, day_number, date, notes, title) VALUES (?, ?, ?, ?, ?)'
+    ).run(tripId, dayNumber, nextDate, notes || null, title || null);
+
+    updateReservationsForShiftedDays(shiftedDays);
+    syncAccommodationReferences(tripId);
+
+    db.exec('COMMIT');
+
+    const day = db.prepare('SELECT * FROM days WHERE id = ?').get(result.lastInsertRowid) as TripDayRow;
+    const dayResult = { ...day, assignments: [], notes_items: [] };
+
+    res.status(201).json({ day: dayResult });
+    broadcast(tripId, 'day:created', { day: dayResult }, req.headers['x-socket-id'] as string);
+
+    if (shiftedDays.size > 0) {
+      const shiftedDayRows = loadTripDays(tripId).filter(entry => shiftedDays.has(entry.id));
+      for (const shiftedDay of shiftedDayRows) {
+        broadcast(tripId, 'day:updated', { day: shiftedDay }, req.headers['x-socket-id'] as string);
+      }
+    }
+  } catch (error) {
+    db.exec('ROLLBACK');
+    console.error('Failed to insert day:', error);
+    res.status(500).json({ error: 'Failed to insert day' });
+  }
 });
 
 router.put('/:id', authenticate, requireTripAccess, (req: Request, res: Response) => {
@@ -164,20 +379,103 @@ router.put('/:id', authenticate, requireTripAccess, (req: Request, res: Response
 router.delete('/:id', authenticate, requireTripAccess, (req: Request, res: Response) => {
   const { tripId, id } = req.params;
 
-  const day = db.prepare('SELECT * FROM days WHERE id = ? AND trip_id = ?').get(id, tripId);
+  const day = db.prepare('SELECT * FROM days WHERE id = ? AND trip_id = ?').get(id, tripId) as TripDayRow | undefined;
   if (!day) {
     return res.status(404).json({ error: 'Day not found' });
   }
 
-  // Clean up budget items linked to assignments on this day
-  const assignmentsToDelete = db.prepare('SELECT budget_item_id FROM day_assignments WHERE day_id = ? AND budget_item_id IS NOT NULL').all(id);
-  for (const a of assignmentsToDelete as any[]) {
-    db.prepare('DELETE FROM budget_items WHERE id = ?').run(a.budget_item_id);
+  const dayCount = db.prepare('SELECT COUNT(*) as count FROM days WHERE trip_id = ?').get(tripId) as { count: number };
+  if (dayCount.count <= 1) {
+    return res.status(400).json({ error: 'At least one day must remain' });
   }
 
-  db.prepare('DELETE FROM days WHERE id = ?').run(id);
-  res.json({ success: true });
-  broadcast(tripId, 'day:deleted', { dayId: Number(id) }, req.headers['x-socket-id'] as string);
+  const trip = db.prepare('SELECT start_date, end_date FROM trips WHERE id = ?').get(tripId) as TripDateRangeRow | undefined;
+  if (!trip) {
+    return res.status(404).json({ error: 'Trip not found' });
+  }
+
+  db.exec('BEGIN');
+  try {
+    const previousDay = db.prepare(
+      'SELECT id FROM days WHERE trip_id = ? AND day_number = ?'
+    ).get(tripId, day.day_number - 1) as { id: number } | undefined;
+    const nextDay = db.prepare(
+      'SELECT id FROM days WHERE trip_id = ? AND day_number = ?'
+    ).get(tripId, day.day_number + 1) as { id: number } | undefined;
+
+    const accommodationsToAdjust = db.prepare(
+      'SELECT id, start_day_id, end_day_id FROM day_accommodations WHERE trip_id = ? AND (start_day_id = ? OR end_day_id = ?)'
+    ).all(tripId, id, id) as Array<{ id: number; start_day_id: number; end_day_id: number }>;
+    const updateAccommodationDays = db.prepare(
+      'UPDATE day_accommodations SET start_day_id = ?, end_day_id = ? WHERE id = ?'
+    );
+
+    for (const accommodation of accommodationsToAdjust) {
+      if (accommodation.start_day_id === Number(id) && accommodation.end_day_id === Number(id)) {
+        deleteAccommodationCascade(accommodation.id);
+        continue;
+      }
+
+      const newStartDayId = accommodation.start_day_id === Number(id)
+        ? (nextDay?.id ?? previousDay?.id ?? accommodation.start_day_id)
+        : accommodation.start_day_id;
+      const newEndDayId = accommodation.end_day_id === Number(id)
+        ? (previousDay?.id ?? nextDay?.id ?? accommodation.end_day_id)
+        : accommodation.end_day_id;
+
+      updateAccommodationDays.run(newStartDayId, newEndDayId, accommodation.id);
+    }
+
+    // Clean up budget items linked to assignments on this day
+    const assignmentsToDelete = db.prepare('SELECT budget_item_id FROM day_assignments WHERE day_id = ? AND budget_item_id IS NOT NULL').all(id);
+    for (const a of assignmentsToDelete as Array<{ budget_item_id: number }>) {
+      db.prepare('DELETE FROM budget_items WHERE id = ?').run(a.budget_item_id);
+    }
+
+    db.prepare('DELETE FROM days WHERE id = ?').run(id);
+
+    const laterDays = db.prepare(
+      'SELECT id, day_number, date FROM days WHERE trip_id = ? AND day_number > ? ORDER BY day_number ASC'
+    ).all(tripId, day.day_number) as Array<{ id: number; day_number: number; date: string | null }>;
+    const shiftedDays = new Map<number, number>();
+    const setTempDayNumber = db.prepare('UPDATE days SET day_number = ? WHERE id = ?');
+    const updateShiftedDay = db.prepare('UPDATE days SET day_number = ?, date = ? WHERE id = ?');
+
+    laterDays.forEach((entry, index) => setTempDayNumber.run(-(index + 1), entry.id));
+    for (const entry of laterDays) {
+      updateShiftedDay.run(
+        entry.day_number - 1,
+        entry.date ? shiftIsoDate(entry.date, -1) : null,
+        entry.id,
+      );
+      shiftedDays.set(entry.id, -1);
+    }
+
+    if (trip.end_date) {
+      db.prepare('UPDATE trips SET end_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(shiftIsoDate(trip.end_date, -1), tripId);
+    }
+
+    updateReservationsForShiftedDays(shiftedDays);
+    syncAccommodationReferences(tripId);
+
+    db.exec('COMMIT');
+
+    const selectedDayId = nextDay?.id ?? previousDay?.id ?? null;
+    res.json({ success: true, selected_day_id: selectedDayId });
+    broadcast(tripId, 'day:deleted', { dayId: Number(id) }, req.headers['x-socket-id'] as string);
+
+    if (shiftedDays.size > 0) {
+      const shiftedDayRows = loadTripDays(tripId).filter(entry => shiftedDays.has(entry.id));
+      for (const shiftedDay of shiftedDayRows) {
+        broadcast(tripId, 'day:updated', { day: shiftedDay }, req.headers['x-socket-id'] as string);
+      }
+    }
+  } catch (error) {
+    db.exec('ROLLBACK');
+    console.error('Failed to delete day:', error);
+    res.status(500).json({ error: 'Failed to delete day' });
+  }
 });
 
 const accommodationsRouter = express.Router({ mergeParams: true });

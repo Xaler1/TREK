@@ -22,7 +22,7 @@ import Navbar from '../components/Layout/Navbar'
 import { useToast } from '../components/shared/Toast'
 import { Map, X, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useTranslation } from '../i18n'
-import { addonsApi, accommodationsApi, authApi, tripsApi, assignmentsApi } from '../api/client'
+import { addonsApi, accommodationsApi, authApi, tripsApi, assignmentsApi, daysApi } from '../api/client'
 import ConfirmDialog from '../components/shared/ConfirmDialog'
 import { useResizablePanels } from '../hooks/useResizablePanels'
 import { useTripWebSocket } from '../hooks/useTripWebSocket'
@@ -279,6 +279,52 @@ export default function TripPlannerPage(): React.ReactElement | null {
     catch (err: unknown) { toast.error(err instanceof Error ? err.message : 'Unknown error') }
   }, [tripId, tripStore, toast])
 
+  const refreshStructuralDayData = useCallback(async () => {
+    await Promise.all([
+      tripsApi.get(tripId).then(data => useTripStore.setState({ trip: data.trip })),
+      tripStore.refreshDays(tripId),
+      tripStore.loadReservations(tripId),
+      accommodationsApi.list(tripId)
+        .then(data => setTripAccommodations(data.accommodations || []))
+        .catch(() => {}),
+      tripStore.loadBudgetItems?.(tripId) ?? Promise.resolve(),
+    ])
+  }, [tripId, tripStore])
+
+  const handleInsertDayAfter = useCallback(async (dayId) => {
+    try {
+      const result = await daysApi.create(tripId, { after_day_id: dayId })
+      await refreshStructuralDayData()
+      if (result?.day?.id) {
+        tripStore.setSelectedDay(result.day.id)
+      }
+      toast.success(t('trip.toast.dayInserted'))
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Unknown error')
+    }
+  }, [refreshStructuralDayData, t, toast, tripId, tripStore])
+
+  const handleDeleteDay = useCallback(async (dayId) => {
+    if (!window.confirm(t('planner.confirmDeleteDay'))) return
+
+    try {
+      const result = await daysApi.delete(tripId, dayId)
+      await refreshStructuralDayData()
+
+      if (selectedDayId === dayId) {
+        tripStore.setSelectedDay(result?.selected_day_id ?? null)
+      }
+
+      if (showDayDetail?.id === dayId) {
+        setShowDayDetail(null)
+      }
+
+      toast.success(t('trip.toast.dayDeleted'))
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Unknown error')
+    }
+  }, [refreshStructuralDayData, selectedDayId, showDayDetail, t, toast, tripId, tripStore])
+
   const handleSaveReservation = async (data) => {
     try {
       if (editingReservation) {
@@ -473,6 +519,8 @@ export default function TripPlannerPage(): React.ReactElement | null {
                   stopTimings={stopTimings}
                   onUpdateAssignmentTime={handleUpdateAssignmentTime}
                   onShiftDates={() => setShowShiftDates(true)}
+                  onInsertDayAfter={handleInsertDayAfter}
+                  onDeleteDay={handleDeleteDay}
                 />
                 {!leftCollapsed && (
                   <div
@@ -629,7 +677,7 @@ export default function TripPlannerPage(): React.ReactElement | null {
                   </div>
                   <div style={{ flex: 1, overflow: 'auto' }}>
                     {mobileSidebarOpen === 'left'
-                      ? <DayPlanSidebar tripId={tripId} trip={trip} days={days} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} selectedAssignmentId={selectedAssignmentId} onSelectDay={(id) => { handleSelectDay(id); setMobileSidebarOpen(null) }} onPlaceClick={handlePlaceClick} onReorder={handleReorder} onUpdateDayTitle={handleUpdateDayTitle} onAssignToDay={handleAssignToDay} onRouteCalculated={(r) => { if (r) { setRoute(r.coordinates); setRouteInfo({ distance: r.distanceText, duration: r.durationText }) } else { setRoute(null); setRouteInfo(null) } }} reservations={reservations} onAddReservation={(dayId) => { setEditingReservation(null); tripStore.setSelectedDay(dayId); setShowReservationModal(true); setMobileSidebarOpen(null) }} onDayDetail={(day) => { setShowDayDetail(day); setSelectedPlaceId(null); selectAssignment(null); setMobileSidebarOpen(null) }} onRemoveAssignment={handleRemoveAssignment} onEditPlace={(place, assignmentId) => { setEditingPlace(place); setEditingAssignmentId(assignmentId || null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onDeletePlace={(placeId) => handleDeletePlace(placeId)} accommodations={tripAccommodations} stopTimings={stopTimings} onUpdateAssignmentTime={handleUpdateAssignmentTime} onShiftDates={() => setShowShiftDates(true)} />
+                      ? <DayPlanSidebar tripId={tripId} trip={trip} days={days} places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} selectedAssignmentId={selectedAssignmentId} onSelectDay={(id) => { handleSelectDay(id); setMobileSidebarOpen(null) }} onPlaceClick={handlePlaceClick} onReorder={handleReorder} onUpdateDayTitle={handleUpdateDayTitle} onAssignToDay={handleAssignToDay} onRouteCalculated={(r) => { if (r) { setRoute(r.coordinates); setRouteInfo({ distance: r.distanceText, duration: r.durationText }) } else { setRoute(null); setRouteInfo(null) } }} reservations={reservations} onAddReservation={(dayId) => { setEditingReservation(null); tripStore.setSelectedDay(dayId); setShowReservationModal(true); setMobileSidebarOpen(null) }} onDayDetail={(day) => { setShowDayDetail(day); setSelectedPlaceId(null); selectAssignment(null); setMobileSidebarOpen(null) }} onRemoveAssignment={handleRemoveAssignment} onEditPlace={(place, assignmentId) => { setEditingPlace(place); setEditingAssignmentId(assignmentId || null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onDeletePlace={(placeId) => handleDeletePlace(placeId)} accommodations={tripAccommodations} stopTimings={stopTimings} onUpdateAssignmentTime={handleUpdateAssignmentTime} onShiftDates={() => setShowShiftDates(true)} onInsertDayAfter={handleInsertDayAfter} onDeleteDay={handleDeleteDay} />
                       : <PlacesSidebar places={places} categories={categories} assignments={assignments} selectedDayId={selectedDayId} selectedPlaceId={selectedPlaceId} onPlaceClick={handlePlaceClick} onAddPlace={() => { setEditingPlace(null); setShowPlaceForm(true); setMobileSidebarOpen(null) }} onAssignToDay={handleAssignToDay} days={days} isMobile onCategoryFilterChange={setMapCategoryFilter} />
                     }
                   </div>

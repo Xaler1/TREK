@@ -77,6 +77,8 @@ interface DayPlanSidebarProps {
   stopTimings?: StopTiming[]
   onUpdateAssignmentTime?: (assignmentId: number, data: { place_time?: string | null; duration_minutes?: number | null }) => Promise<void>
   onShiftDates?: () => void
+  onInsertDayAfter: (dayId: number) => void
+  onDeleteDay: (dayId: number) => void
 }
 
 export default function DayPlanSidebar({
@@ -91,6 +93,8 @@ export default function DayPlanSidebar({
   stopTimings,
   onUpdateAssignmentTime,
   onShiftDates,
+  onInsertDayAfter,
+  onDeleteDay,
 }: DayPlanSidebarProps) {
   const toast = useToast()
   const { t, language, locale } = useTranslation()
@@ -121,6 +125,16 @@ export default function DayPlanSidebar({
   const dragDataRef = useRef(null) // Speichert Drag-Daten als Backup (dataTransfer geht bei Re-Render verloren)
 
   const currency = trip?.currency || 'EUR'
+  const dayNumberById = new Map(days.map((day) => [day.id, day.day_number]))
+
+  const accommodationIncludesDay = (accommodation, dayId) => {
+    const currentDayNumber = dayNumberById.get(dayId)
+    const startDayNumber = dayNumberById.get(accommodation.start_day_id)
+    const endDayNumber = dayNumberById.get(accommodation.end_day_id)
+
+    if (currentDayNumber == null || startDayNumber == null || endDayNumber == null) return false
+    return currentDayNumber >= startDayNumber && currentDayNumber <= endDayNumber
+  }
 
   // Drag-Daten aus dataTransfer, Ref oder window lesen (dataTransfer geht bei Re-Render verloren)
   const getDragData = (e) => {
@@ -514,7 +528,7 @@ export default function DayPlanSidebar({
                         <Pencil size={10} strokeWidth={1.8} color="var(--text-secondary)" />
                       </button>
                       {(() => {
-                        const dayAccs = accommodations.filter(a => day.id >= a.start_day_id && day.id <= a.end_day_id)
+                        const dayAccs = accommodations.filter(a => accommodationIncludesDay(a, day.id))
                         if (dayAccs.length === 0) return null
                         return dayAccs.map(acc => {
                           const isCheckIn = acc.start_day_id === day.id
@@ -544,6 +558,25 @@ export default function DayPlanSidebar({
                   </div>
                 </div>
 
+                <button
+                  onClick={e => { e.stopPropagation(); onInsertDayAfter(day.id) }}
+                  title={t('planner.insertDayAfter')}
+                  style={{ flexShrink: 0, background: 'none', border: 'none', padding: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'var(--text-faint)' }}
+                  onMouseEnter={e => e.currentTarget.style.color = 'var(--text-primary)'}
+                  onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}
+                >
+                  <Plus size={13} strokeWidth={2} />
+                </button>
+                <button
+                  onClick={e => { e.stopPropagation(); onDeleteDay(day.id) }}
+                  title={t('planner.deleteDay')}
+                  disabled={days.length <= 1}
+                  style={{ flexShrink: 0, background: 'none', border: 'none', padding: 4, cursor: days.length <= 1 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', color: days.length <= 1 ? 'var(--text-faint)' : 'var(--text-faint)', opacity: days.length <= 1 ? 0.4 : 1 }}
+                  onMouseEnter={e => { if (days.length > 1) e.currentTarget.style.color = '#dc2626' }}
+                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-faint)' }}
+                >
+                  <Trash2 size={13} strokeWidth={2} />
+                </button>
                 <button
                   onClick={e => openAddNote(day.id, e)}
                   title={t('dayplan.addNote')}

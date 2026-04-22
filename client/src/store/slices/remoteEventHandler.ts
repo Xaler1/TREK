@@ -11,6 +11,8 @@ type SetState = StoreApi<TripStoreState>['setState']
 export function handleRemoteEvent(set: SetState, event: WebSocketEvent): void {
   const { type, ...payload } = event
 
+  const sortDays = (days: Day[]) => [...days].sort((left, right) => left.day_number - right.day_number)
+
   set(state => {
     switch (type) {
       // Places
@@ -113,10 +115,10 @@ export function handleRemoteEvent(set: SetState, event: WebSocketEvent): void {
       // Days
       case 'day:created':
         if (state.days.some(d => d.id === (payload.day as Day).id)) return {}
-        return { days: [...state.days, payload.day as Day] }
+        return { days: sortDays([...state.days, payload.day as Day]) }
       case 'day:updated':
         return {
-          days: state.days.map(d => d.id === (payload.day as Day).id ? payload.day as Day : d),
+          days: sortDays(state.days.map(d => d.id === (payload.day as Day).id ? payload.day as Day : d)),
         }
       case 'day:deleted': {
         const removedDayId = String(payload.dayId)
